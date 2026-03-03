@@ -1,0 +1,23 @@
+{
+  "name": "second-brain",
+  "private": true,
+  "workspaces": ["apps/*", "services/*", "packages/*"],
+  "scripts": {
+    "dev": "docker compose -f infra/docker/docker-compose.yml up --build",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "typecheck": "bun run typecheck:packages && bun run typecheck:services && bun run typecheck:apps",
+    "typecheck:packages": "cd packages/types && bun run typecheck && cd ../config && bun run typecheck && cd ../db && bun run typecheck",
+    "typecheck:services": "cd services/api && bun run typecheck && cd ../worker && bun run typecheck",
+    "typecheck:apps": "cd apps/finances-panel && bun run typecheck",
+    "test": "bun run test:packages && bun run test:services",
+    "test:packages": "cd packages/types && bun run test && cd ../config && bun run test && cd ../db && bun run test",
+    "test:services": "cd services/api && bun run test && cd ../worker && bun run test",
+    "db:migrate": "cd packages/db && bun run migrate",
+    "db:seed": "cd packages/db && bun run seed"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "typescript": "^5.8.2"
+  }
+}

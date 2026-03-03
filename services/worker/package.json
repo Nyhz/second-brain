@@ -1,0 +1,17 @@
+{
+  "name": "@second-brain/worker",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@second-brain/config": "workspace:*",
+    "@second-brain/db": "workspace:*",
+    "elysia": "^1.2.10",
+    "prom-client": "^15.1.3"
+  }
+}
