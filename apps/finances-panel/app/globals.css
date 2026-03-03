@@ -1,84 +1,73 @@
-:root {
-  --bg: #f6f7f9;
-  --surface: #ffffff;
-  --ink: #13161a;
-  --muted: #6b7280;
-  --accent: #1f6feb;
-  --border: #d8dee5;
-}
-
 * {
   box-sizing: border-box;
 }
 
 body {
   margin: 0;
-  font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    sans-serif;
-  background: radial-gradient(circle at top right, #f0f6ff, var(--bg) 45%);
-  color: var(--ink);
-}
-
-main {
-  max-width: 1080px;
-  margin: 0 auto;
-  padding: 2rem 1rem;
 }
 
 h1,
-h2 {
+h2,
+h3,
+p {
   margin-top: 0;
-}
-
-.card {
-  border: 1px solid var(--border);
-  background: var(--surface);
-  border-radius: 12px;
-  padding: 1rem;
 }
 
 .grid {
   display: grid;
-  gap: 1rem;
-}
-
-.grid.kpi {
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-}
-
-.table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.table th,
-.table td {
-  text-align: left;
-  padding: 0.5rem;
-  border-bottom: 1px solid var(--border);
-}
-
-form {
-  display: grid;
-  gap: 0.75rem;
-}
-
-input,
-select,
-button {
-  padding: 0.6rem;
-  border-radius: 8px;
-  border: 1px solid var(--border);
-}
-
-button {
-  cursor: pointer;
-  background: var(--accent);
-  color: white;
-  border: none;
 }
 
 .small {
-  color: var(--muted);
-  font-size: 0.875rem;
+  color: var(--sb-muted);
+  font-size: 0.86rem;
+}
+
+.top-nav-actions {
+  display: flex;
+  gap: 0.45rem;
+}
+
+.top-nav-actions button {
+  border: 1px solid var(--sb-border);
+  background: #0b1326;
+  color: var(--sb-muted);
+  border-radius: 8px;
+  padding: 0.35rem 0.55rem;
+  cursor: pointer;
+}
+
+.top-nav-actions button:hover {
+  color: var(--sb-ink);
+  border-color: #3b82f6;
+}
+
+.form-grid {
+  display: grid;
+  gap: 0.7rem;
+}
+
+.form-grid input,
+.form-grid select,
+.form-grid button {
+  border: 1px solid var(--sb-border);
+  background: #0b1326;
+  color: var(--sb-ink);
+  border-radius: 10px;
+  padding: 0.55rem 0.65rem;
+}
+
+.form-grid button {
+  background: linear-gradient(90deg, #22d3ee, #3b82f6);
+  color: #02111f;
+  font-weight: 700;
+}
+
+.two-col {
+  grid-template-columns: 1fr 1fr;
+}
+
+@media (max-width: 980px) {
+  .two-col {
+    grid-template-columns: 1fr;
+  }
 }

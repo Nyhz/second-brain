@@ -1,25 +1,38 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import type { Account } from '@second-brain/types';
+import { Card, DataTable, KpiCard, PriceLineChart } from '@second-brain/ui';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { apiRequest } from '../../lib/api';
-
-type Account = {
-  id: string;
-  name: string;
-  currency: string;
-  accountType: string;
-};
+import { loadAccountsData } from '../../lib/data/accounts-data';
+import { getApiErrorMessage } from '../../lib/errors';
+import { formatMoney } from '../../lib/format';
+import { buildSeries, dayKey } from '../../lib/mock/seed';
 
 export default function AccountsPage() {
-  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [rows, setRows] = useState<Account[]>([]);
+  const [source, setSource] = useState<'api' | 'mock'>('mock');
+  const [isLoading, setIsLoading] = useState(true);
+  const [isCreating, setIsCreating] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
   const [name, setName] = useState('');
   const [currency, setCurrency] = useState('USD');
   const [accountType, setAccountType] = useState('checking');
 
   const load = useCallback(async () => {
-    const rows = await apiRequest<Account[]>('/finances/accounts');
-    setAccounts(rows);
+    setIsLoading(true);
+    try {
+      const data = await loadAccountsData();
+      setRows(data.rows);
+      setSource(data.source);
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(getApiErrorMessage(error));
+    } finally {
+      setIsLoading(false);
+    }
   }, []);
 
   useEffect(() => {
@@ -28,76 +41,137 @@ export default function AccountsPage() {
 
   const createAccount = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!name.trim()) {
+      setErrorMessage('Account name is required.');
+      return;
+    }
 
-    await apiRequest('/finances/accounts', {
-      method: 'POST',
-      body: JSON.stringify({ name, currency, accountType }),
-    });
-
-    setName('');
-    await load();
+    setIsCreating(true);
+    try {
+      await apiRequest('/finances/accounts', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: name.trim(),
+          currency: currency.toUpperCase(),
+          accountType,
+        }),
+      });
+      setName('');
+      setCurrency('USD');
+      await load();
+    } catch (error) {
+      setErrorMessage(getApiErrorMessage(error));
+    } finally {
+      setIsCreating(false);
+    }
   };
+
+  const netCash = useMemo(() => {
+    return rows.reduce(
+      (sum, row) => sum + (row.accountType === 'credit' ? -500 : 1000),
+      0,
+    );
+  }, [rows]);
+
+  const positive = rows.filter((row) => row.accountType !== 'credit').length;
 
   return (
     <div className="grid" style={{ gap: '1rem' }}>
-      <h1>Accounts</h1>
+      <header>
+        <h1>Accounts</h1>
+        <p className="small">Liquidity and cash-flow accounts overview.</p>
+        <p className="small">Source: {source.toUpperCase()}</p>
+      </header>
+      {errorMessage ? (
+        <p className="small" style={{ color: '#f87171' }}>
+          {errorMessage}
+        </p>
+      ) : null}
 
-      <section className="card">
-        <h2>Create Account</h2>
-        <form onSubmit={createAccount}>
-          <input
-            required
-            placeholder="Account name"
-            value={name}
-            onChange={(e: { target: { value: string } }) =>
-              setName(e.target.value)
-            }
-          />
-          <input
-            required
-            maxLength={3}
-            placeholder="Currency (USD)"
-            value={currency}
-            onChange={(e: { target: { value: string } }) =>
-              setCurrency(e.target.value.toUpperCase())
-            }
-          />
-          <select
-            value={accountType}
-            onChange={(e: { target: { value: string } }) =>
-              setAccountType(e.target.value)
-            }
-          >
-            <option value="checking">Checking</option>
-            <option value="savings">Savings</option>
-            <option value="cash">Cash</option>
-            <option value="credit">Credit</option>
-          </select>
-          <button type="submit">Create Account</button>
-        </form>
+      <section
+        className="grid kpi"
+        style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))' }}
+      >
+        <KpiCard label="Net Cash (Estimated)" value={formatMoney(netCash)} />
+        <KpiCard label="Positive Accounts" value={String(positive)} />
+        <KpiCard label="Report Date" value={dayKey()} />
       </section>
 
-      <section className="card">
-        <h2>Existing Accounts</h2>
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Type</th>
-              <th>Currency</th>
-            </tr>
-          </thead>
-          <tbody>
-            {accounts.map((account) => (
-              <tr key={account.id}>
-                <td>{account.name}</td>
-                <td>{account.accountType}</td>
-                <td>{account.currency}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
+      <div className="grid two-col" style={{ gap: '1rem' }}>
+        <Card title="Add Account">
+          <form className="form-grid" onSubmit={createAccount}>
+            <input
+              value={name}
+              placeholder="Account name"
+              onChange={(e) => setName(e.target.value)}
+              required
+            />
+            <input
+              value={currency}
+              maxLength={3}
+              placeholder="Currency"
+              onChange={(e) => setCurrency(e.target.value.toUpperCase())}
+              required
+            />
+            <select
+              value={accountType}
+              onChange={(e) => setAccountType(e.target.value)}
+            >
+              <option value="checking">Checking</option>
+              <option value="savings">Savings</option>
+              <option value="cash">Cash</option>
+              <option value="credit">Credit</option>
+            </select>
+            <button type="submit" disabled={isCreating}>
+              {isCreating ? 'Creating...' : 'Create Account'}
+            </button>
+          </form>
+        </Card>
+
+        <Card title="Cash Balance Trend">
+          <PriceLineChart
+            data={buildSeries(
+              `accounts-${dayKey()}`,
+              20,
+              Math.max(netCash, 5000),
+            )}
+          />
+        </Card>
+      </div>
+
+      <Card title="Accounts Table">
+        {isLoading ? (
+          <p className="small">Loading accounts...</p>
+        ) : (
+          <DataTable
+            columns={[
+              {
+                key: 'name',
+                header: 'Account',
+                render: (row: Account) => row.name,
+              },
+              {
+                key: 'type',
+                header: 'Type',
+                render: (row: Account) => row.accountType,
+              },
+              {
+                key: 'currency',
+                header: 'Currency',
+                render: (row: Account) => row.currency,
+              },
+              {
+                key: 'created',
+                header: 'Created',
+                render: (row: Account) =>
+                  new Date(row.createdAt).toLocaleDateString(),
+              },
+            ]}
+            rows={rows}
+            rowKey={(row) => row.id}
+          />
+        )}
+      </Card>
     </div>
   );
 }

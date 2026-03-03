@@ -6,19 +6,46 @@ const baseSchema = z.object({
 
 const apiSchema = baseSchema.extend({
   API_PORT: z.coerce.number().int().positive().default(3001),
+  SERVICE_HEALTH_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  API_HEALTH_URL: z.string().url().default('http://api:3001/health'),
+  WORKER_HEALTH_URL: z.string().url().default('http://worker:3002/health'),
+  CADDY_HEALTH_URL: z
+    .string()
+    .url()
+    .default('http://caddy:8080/__caddy/healthz'),
 });
 
 const workerSchema = baseSchema.extend({
   WORKER_PORT: z.coerce.number().int().positive().default(3002),
   PRICE_JOB_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),
   BALANCE_JOB_INTERVAL_SECONDS: z.coerce.number().int().positive().default(120),
+  ASSET_SNAPSHOT_INTERVAL_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(86400),
+  SERVICE_HEALTH_INTERVAL_SECONDS: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(3600),
+  SERVICE_HEALTH_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  API_HEALTH_URL: z.string().url().default('http://api:3001/health'),
+  WORKER_HEALTH_URL: z.string().url().default('http://worker:3002/health'),
+  CADDY_HEALTH_URL: z
+    .string()
+    .url()
+    .default('http://caddy:8080/__caddy/healthz'),
   SYNTHETIC_PRICE_SEED: z.coerce.number().int().default(42),
   SYNTHETIC_PRICE_SYMBOLS: z.string().default('SPY,QQQ,BTC'),
 });
 
 const appSchema = z.object({
-  NEXT_PUBLIC_API_URL: z.string().url().default('http://localhost:3001'),
+  NEXT_PUBLIC_API_URL: z.string().min(1).default('/api'),
+  INTERNAL_API_URL: z.string().url().default('http://localhost:3001'),
+  NEXT_PUBLIC_BASE_PATH: z.string().default(''),
   FINANCES_PANEL_PORT: z.coerce.number().int().positive().default(3000),
+  PORTAL_PORT: z.coerce.number().int().positive().default(3005),
 });
 
 export type ApiEnv = z.infer<typeof apiSchema>;

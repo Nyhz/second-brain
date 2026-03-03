@@ -10,20 +10,19 @@
 `docker compose -f infra/docker/docker-compose.yml run --rm api sh -lc "cd /app/packages/db && bun run seed"`
 
 ## URLs
-- Finances panel (via reverse proxy): `https://finances.lan`
-- API (via reverse proxy): `https://api.lan`
-- Worker (via reverse proxy): `https://worker.lan`
+- Ecosystem landing (via reverse proxy): `https://secondbrain.lan`
+- Finances panel: `https://secondbrain.lan/finances`
+- API: `https://secondbrain.lan/api`
+- Worker: `https://secondbrain.lan/worker`
 
 ## LAN DNS setup
-You must map each hostname to this Mac's LAN IP in your router DNS (or Pi-hole/AdGuard):
-- `finances.lan -> <MAC_LAN_IP>`
-- `api.lan -> <MAC_LAN_IP>`
-- `worker.lan -> <MAC_LAN_IP>`
+You must map the unified hostname to this Mac's LAN IP in your router DNS (or Pi-hole/AdGuard):
+- `secondbrain.lan -> <MAC_LAN_IP>`
 
 Get the Mac LAN IP:
 `ipconfig getifaddr en0`
 
-If your router has no local DNS feature, add entries in each client's hosts file.
+If your router has no local DNS feature, add an entry in each client's hosts file.
 
 ## HTTPS in LAN
 Caddy uses an internal CA (`tls internal`) for LAN HTTPS.

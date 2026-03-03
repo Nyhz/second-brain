@@ -1,4 +1,6 @@
 import {
+  index,
+  integer,
   jsonb,
   pgEnum,
   pgSchema,
@@ -28,3 +30,27 @@ export const jobRuns = coreSchema.table('job_runs', {
     .notNull()
     .default({}),
 });
+
+export const serviceHealthChecks = coreSchema.table(
+  'service_health_checks',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    serviceName: varchar('service_name', { length: 64 }).notNull(),
+    targetUrl: varchar('target_url', { length: 512 }).notNull(),
+    checkedAt: timestamp('checked_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    status: varchar('status', { length: 16 }).notNull(),
+    httpStatus: integer('http_status'),
+    latencyMs: integer('latency_ms'),
+    errorMessage: varchar('error_message', { length: 1024 }),
+    source: varchar('source', { length: 16 }).notNull().default('scheduled'),
+  },
+  (table) => ({
+    serviceCheckedIdx: index('service_health_checks_service_checked_idx').on(
+      table.serviceName,
+      table.checkedAt,
+    ),
+    checkedIdx: index('service_health_checks_checked_idx').on(table.checkedAt),
+  }),
+);

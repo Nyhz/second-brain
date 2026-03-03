@@ -74,13 +74,31 @@ services:
     env_file:
       - ../../.env
     environment:
-      NEXT_PUBLIC_API_URL: http://api:3001
-      FINANCES_PANEL_PORT: 3000
+      NEXT_PUBLIC_API_URL: /api
+      INTERNAL_API_URL: http://api:3001
+      NEXT_PUBLIC_BASE_PATH: /finances
+      FINANCES_PANEL_PORT: ${FINANCES_PANEL_PORT:-3000}
     depends_on:
       api:
         condition: service_healthy
     healthcheck:
-      test: ['CMD-SHELL', 'bun -e "fetch(\"http://localhost:3000\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"']
+      test: ['CMD-SHELL', 'bun -e "fetch(\"http://localhost:3000/finances\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"']
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  portal:
+    build:
+      context: ../..
+      dockerfile: apps/portal/Dockerfile
+    container_name: second-brain-portal
+    env_file:
+      - ../../.env
+    environment:
+      PORTAL_PORT: ${PORTAL_PORT:-3005}
+      INTERNAL_API_URL: http://api:3001
+    healthcheck:
+      test: ['CMD-SHELL', 'bun -e "fetch(\"http://localhost:3005\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"']
       interval: 15s
       timeout: 5s
       retries: 10
@@ -102,8 +120,10 @@ services:
         condition: service_healthy
       finances-panel:
         condition: service_healthy
+      portal:
+        condition: service_healthy
     healthcheck:
-      test: ['CMD-SHELL', 'wget -qO- http://localhost:80 >/dev/null 2>&1 || exit 1']
+      test: ['CMD-SHELL', 'caddy version >/dev/null 2>&1 || exit 1']
       interval: 10s
       timeout: 3s
       retries: 10

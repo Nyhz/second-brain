@@ -1,14 +1,40 @@
+secondbrain.lan {
+  tls internal
+
+  handle_path /api/* {
+    reverse_proxy api:3001
+  }
+
+  handle_path /worker/* {
+    reverse_proxy worker:3002
+  }
+
+  handle /finances* {
+    reverse_proxy finances-panel:3000
+  }
+
+  handle {
+    reverse_proxy portal:3005
+  }
+}
+
 finances.lan {
   tls internal
-  reverse_proxy finances-panel:3000
+  redir https://secondbrain.lan/finances{uri} permanent
 }
 
 api.lan {
   tls internal
-  reverse_proxy api:3001
+  redir https://secondbrain.lan/api{uri} permanent
 }
 
 worker.lan {
   tls internal
-  reverse_proxy worker:3002
+  redir https://secondbrain.lan/worker{uri} permanent
+}
+
+:8080 {
+  handle /__caddy/healthz {
+    respond "ok" 200
+  }
 }

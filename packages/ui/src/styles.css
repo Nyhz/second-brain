@@ -1,0 +1,224 @@
+:root {
+  --sb-bg: #070b14;
+  --sb-bg-elevated: #0f172a;
+  --sb-bg-card: #111a2f;
+  --sb-ink: #e2e8f0;
+  --sb-muted: #94a3b8;
+  --sb-border: #1f2a44;
+  --sb-accent: #22d3ee;
+  --sb-accent-2: #60a5fa;
+  --sb-success: #34d399;
+}
+
+body {
+  background: radial-gradient(
+      circle at 12% 12%,
+      rgba(34, 211, 238, 0.14),
+      transparent 30%
+    ),
+    radial-gradient(
+      circle at 88% 18%,
+      rgba(96, 165, 250, 0.16),
+      transparent 28%
+    ), var(--sb-bg);
+  color: var(--sb-ink);
+  font-family: "Space Grotesk", "Manrope", "Avenir Next", sans-serif;
+}
+
+.sb-ui-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-columns: 250px 1fr;
+  grid-template-rows: 72px 1fr;
+  grid-template-areas:
+    "sidebar topbar"
+    "sidebar main";
+}
+
+.sb-ui-topbar {
+  grid-area: topbar;
+  border-bottom: 1px solid var(--sb-border);
+  background: color-mix(in srgb, var(--sb-bg-elevated) 85%, transparent);
+  backdrop-filter: blur(8px);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.sb-ui-topnav-row {
+  height: 100%;
+  padding: 0 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sb-ui-brand {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+}
+
+.sb-ui-sidebar {
+  grid-area: sidebar;
+  border-right: 1px solid var(--sb-border);
+  padding: 1rem;
+  background: linear-gradient(180deg, #0b1222, #0a1120);
+}
+
+.sb-ui-sidenav {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.sb-ui-nav-link {
+  color: var(--sb-muted);
+  text-decoration: none;
+  padding: 0.62rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid transparent;
+  transition: 180ms ease;
+}
+
+.sb-ui-nav-link:hover,
+.sb-ui-nav-link.is-active {
+  color: var(--sb-ink);
+  border-color: var(--sb-border);
+  background: rgba(96, 165, 250, 0.08);
+}
+
+.sb-ui-main {
+  grid-area: main;
+  padding: 1.4rem;
+}
+
+.sb-ui-card {
+  border: 1px solid var(--sb-border);
+  background: linear-gradient(180deg, var(--sb-bg-card), #0d162b);
+  border-radius: 14px;
+  padding: 1rem;
+  box-shadow: 0 6px 24px rgba(2, 8, 20, 0.35);
+}
+
+.sb-ui-card-title {
+  margin: 0 0 0.8rem;
+  color: var(--sb-ink);
+}
+
+.sb-ui-kpi-card {
+  min-height: 120px;
+}
+
+.sb-ui-kpi-label {
+  color: var(--sb-muted);
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.sb-ui-kpi-value {
+  font-size: 1.6rem;
+  font-weight: 700;
+  margin-top: 0.35rem;
+}
+
+.sb-ui-kpi-delta {
+  margin-top: 0.4rem;
+  color: var(--sb-success);
+  font-size: 0.9rem;
+}
+
+.sb-ui-tabs {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.sb-ui-tab {
+  padding: 0.5rem 0.85rem;
+  border-radius: 10px;
+  border: 1px solid var(--sb-border);
+  color: var(--sb-muted);
+  background: #0b1326;
+}
+
+.sb-ui-tab.is-active {
+  color: var(--sb-ink);
+  border-color: #3b82f6;
+  background: rgba(59, 130, 246, 0.18);
+}
+
+.sb-ui-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.sb-ui-table th,
+.sb-ui-table td {
+  text-align: left;
+  border-bottom: 1px solid var(--sb-border);
+  padding: 0.65rem 0.5rem;
+}
+
+.sb-ui-table th {
+  color: var(--sb-muted);
+  font-weight: 600;
+  font-size: 0.86rem;
+}
+
+.sb-ui-state-empty {
+  color: var(--sb-muted);
+}
+
+.sb-ui-state-error {
+  color: #f87171;
+  font-weight: 600;
+}
+
+.sb-ui-skeleton-wrap {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.sb-ui-skeleton-line {
+  height: 14px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #1e293b, #334155, #1e293b);
+  background-size: 220% 100%;
+  animation: sb-shimmer 1.5s linear infinite;
+}
+
+.sb-ui-chart-wrap {
+  width: 100%;
+}
+
+@keyframes sb-shimmer {
+  0% {
+    background-position: 220% 0;
+  }
+  100% {
+    background-position: -220% 0;
+  }
+}
+
+@media (max-width: 960px) {
+  .sb-ui-shell {
+    grid-template-columns: 1fr;
+    grid-template-rows: 72px auto 1fr;
+    grid-template-areas:
+      "topbar"
+      "sidebar"
+      "main";
+  }
+
+  .sb-ui-sidebar {
+    border-right: none;
+    border-bottom: 1px solid var(--sb-border);
+  }
+
+  .sb-ui-sidenav {
+    grid-auto-flow: column;
+    grid-auto-columns: max-content;
+    overflow-x: auto;
+  }
+}

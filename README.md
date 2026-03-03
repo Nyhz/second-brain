@@ -6,9 +6,10 @@ Local-first, self-hosted multi-app platform powered by Bun.
 1. Copy `.env.example` to `.env`.
 2. Run `docker compose -f infra/docker/docker-compose.yml up --build`.
 3. Open:
-- Finances panel: `http://localhost:3000`
-- API health: `http://localhost:3001/health`
-- Worker health: `http://localhost:3002/health`
+- Ecosystem landing: `https://secondbrain.lan`
+- Finances module: `https://secondbrain.lan/finances`
+- API health: `https://secondbrain.lan/api/health`
+- Worker health: `https://secondbrain.lan/worker/health`
 
 ## Services
 - `apps/finances-panel`: Next.js app for finances dashboard + CRUD.

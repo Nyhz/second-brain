@@ -9,6 +9,7 @@ import {
   registry,
 } from './metrics';
 import { registerFinancesRoutes } from './modules/finances/routes';
+import { registerOpsRoutes } from './modules/ops/routes';
 
 export const createApiApp = () => {
   const env = loadApiEnv();
@@ -81,6 +82,14 @@ export const createApiApp = () => {
   });
 
   registerFinancesRoutes(app, env.DATABASE_URL);
+  registerOpsRoutes(app, env.DATABASE_URL, {
+    timeoutMs: env.SERVICE_HEALTH_TIMEOUT_MS,
+    targets: [
+      { service: 'api', targetUrl: env.API_HEALTH_URL },
+      { service: 'worker', targetUrl: env.WORKER_HEALTH_URL },
+      { service: 'caddy', targetUrl: env.CADDY_HEALTH_URL },
+    ],
+  });
 
   return { app, env };
 };
