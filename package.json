@@ -4,6 +4,11 @@
   "workspaces": ["apps/*", "services/*", "packages/*"],
   "scripts": {
     "dev": "docker compose -f infra/docker/docker-compose.yml up --build",
+    "infra:up": "docker compose --env-file .env -f infra/docker/docker-compose.yml up -d",
+    "infra:up:build": "docker compose --env-file .env -f infra/docker/docker-compose.yml up -d --build",
+    "infra:down": "docker compose --env-file .env -f infra/docker/docker-compose.yml down",
+    "infra:ps": "docker compose --env-file .env -f infra/docker/docker-compose.yml ps",
+    "infra:logs": "docker compose --env-file .env -f infra/docker/docker-compose.yml logs -f",
     "lint": "biome check .",
     "format": "biome format --write .",
     "typecheck": "bun run typecheck:packages && bun run typecheck:services && bun run typecheck:apps",

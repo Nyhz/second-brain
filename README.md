@@ -24,6 +24,18 @@ Local-first, self-hosted multi-app platform powered by Bun.
 - `bun run test`
 - `bun run db:migrate`
 - `bun run db:seed`
+- `bun run infra:up`
+- `bun run infra:up:build`
+- `bun run infra:ps`
+- `bun run infra:logs`
+- `bun run infra:down`
+
+## Daily Infra Ops
+- Start stack: `bun run infra:up`
+- Start with rebuild: `bun run infra:up:build`
+- Check status: `bun run infra:ps`
+- Follow logs: `bun run infra:logs`
+- Stop stack: `bun run infra:down`
 
 ## Open Questions
 - Backup/restore automation scope for v1.1.
