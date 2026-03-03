@@ -5,7 +5,7 @@ import { createDbClient } from './client';
 const bunEnv =
   (globalThis as { Bun?: { env: Record<string, string | undefined> } }).Bun
     ?.env ?? {};
-const databaseUrl = bunEnv.DATABASE_URL_LOCAL ?? bunEnv.DATABASE_URL;
+const databaseUrl = bunEnv.DATABASE_URL ?? bunEnv.DATABASE_URL_LOCAL;
 
 if (!databaseUrl) {
   throw new Error(
