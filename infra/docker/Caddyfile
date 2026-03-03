@@ -1,0 +1,11 @@
+http://finances.lan {
+  reverse_proxy finances-panel:3000
+}
+
+http://api.lan {
+  reverse_proxy api:3001
+}
+
+http://worker.lan {
+  reverse_proxy worker:3002
+}

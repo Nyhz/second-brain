@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: ${POSTGRES_DB}
     ports:
-      - '${POSTGRES_PORT:-5432}:5432'
+      - '127.0.0.1:${POSTGRES_PORT:-5432}:5432'
     volumes:
       - second-brain-postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -38,8 +38,6 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       API_PORT: 3001
-    ports:
-      - '${API_PORT:-3001}:3001'
     depends_on:
       migrations:
         condition: service_completed_successfully
@@ -59,8 +57,6 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       WORKER_PORT: 3002
-    ports:
-      - '${WORKER_PORT:-3002}:3002'
     depends_on:
       migrations:
         condition: service_completed_successfully
@@ -80,8 +76,6 @@ services:
     environment:
       NEXT_PUBLIC_API_URL: http://api:3001
       FINANCES_PANEL_PORT: 3000
-    ports:
-      - '${FINANCES_PANEL_PORT:-3000}:3000'
     depends_on:
       api:
         condition: service_healthy
@@ -89,6 +83,26 @@ services:
       test: ['CMD-SHELL', 'bun -e "fetch(\"http://localhost:3000\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"']
       interval: 15s
       timeout: 5s
+      retries: 10
+
+  caddy:
+    image: caddy:2.8
+    container_name: second-brain-caddy
+    ports:
+      - '80:80'
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      worker:
+        condition: service_healthy
+      finances-panel:
+        condition: service_healthy
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:80 >/dev/null 2>&1 || exit 1']
+      interval: 10s
+      timeout: 3s
       retries: 10
 
 volumes:
