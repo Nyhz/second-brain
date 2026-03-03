@@ -10,9 +10,9 @@
 `docker compose -f infra/docker/docker-compose.yml run --rm api sh -lc "cd /app/packages/db && bun run seed"`
 
 ## URLs
-- Finances panel (via reverse proxy): `http://finances.lan`
-- API (via reverse proxy): `http://api.lan`
-- Worker (via reverse proxy): `http://worker.lan`
+- Finances panel (via reverse proxy): `https://finances.lan`
+- API (via reverse proxy): `https://api.lan`
+- Worker (via reverse proxy): `https://worker.lan`
 
 ## LAN DNS setup
 You must map each hostname to this Mac's LAN IP in your router DNS (or Pi-hole/AdGuard):
@@ -24,6 +24,15 @@ Get the Mac LAN IP:
 `ipconfig getifaddr en0`
 
 If your router has no local DNS feature, add entries in each client's hosts file.
+
+## HTTPS in LAN
+Caddy uses an internal CA (`tls internal`) for LAN HTTPS.
+
+One-time per device, you must trust Caddy's root certificate:
+- Export from container: `/data/caddy/pki/authorities/local/root.crt`
+- Import and mark as trusted in each device/OS certificate store.
+
+Without this trust step, browsers will show a certificate warning.
 
 ## Health and Metrics
 - API: `/health`, `/ready`, `/metrics`

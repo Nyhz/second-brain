@@ -81,8 +81,15 @@ Architecture decisions are recorded in:
   - api
   - worker
   - finances-panel
+  - caddy (reverse proxy)
 - Healthchecks configured.
 - Docker runtime issues resolved (workspace dependency linking and env resolution).
+- LAN routing added through hostname-based reverse proxy:
+  - `finances.lan`
+  - `api.lan`
+  - `worker.lan`
+- LAN HTTPS enabled via Caddy internal CA (`tls internal`).
+- Postgres exposure hardened to localhost only.
 
 ### 8) Verification Status
 - `bun run lint` passes.
@@ -107,6 +114,7 @@ Architecture decisions are recorded in:
 - Add backup/restore scripts for Postgres volumes.
 - Add a small status/diagnostics page consuming health + metrics.
 - Add make-like helper scripts (`scripts/`) for common ops workflows.
+- Add scripted cert export/install docs per OS for LAN HTTPS onboarding.
 
 ### v2 Candidates
 - Queue-backed worker execution model (evolution from scheduler + advisory locks).

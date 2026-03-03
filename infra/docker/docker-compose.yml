@@ -90,8 +90,11 @@ services:
     container_name: second-brain-caddy
     ports:
       - '80:80'
+      - '443:443'
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - second-brain-caddy-data:/data
+      - second-brain-caddy-config:/config
     depends_on:
       api:
         condition: service_healthy
@@ -107,3 +110,5 @@ services:
 
 volumes:
   second-brain-postgres-data:
+  second-brain-caddy-data:
+  second-brain-caddy-config:

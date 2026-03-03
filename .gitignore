@@ -6,3 +6,4 @@ dist
 coverage
 .DS_Store
 bun.lockb
+infra/docker/caddy-local-root.crt
