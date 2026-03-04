@@ -1,5 +1,6 @@
 import type { ServiceStatusHistoryResponse } from '@second-brain/types';
 import { OperationsStatus } from '../components/operations-status';
+import { ThemeSwitcher } from '../components/theme-switcher';
 
 const apps = [
   {
@@ -75,12 +76,17 @@ export default async function HomePage() {
   return (
     <main className="portal-shell">
       <section className="hero">
-        <p className="eyebrow">Second Brain Platform</p>
-        <h1>Unified app ecosystem</h1>
-        <p>
-          One gateway for all personal apps. Use sections below to access active
-          modules and operations endpoints.
-        </p>
+        <div className="hero-head">
+          <div>
+            <p className="eyebrow">Second Brain Platform</p>
+            <h1>Unified app ecosystem</h1>
+            <p>
+              One gateway for all personal apps. Use sections below to access
+              active modules and operations endpoints.
+            </p>
+          </div>
+          <ThemeSwitcher />
+        </div>
       </section>
 
       <section className="grid cards">

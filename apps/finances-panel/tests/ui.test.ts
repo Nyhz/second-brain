@@ -30,10 +30,17 @@ describe('finances panel workflow helpers', () => {
     expect(
       validateTransactionForm({
         accountId: '',
-        postedAt: '2026-03-03',
-        amount: '10',
-        description: 'Coffee',
-        category: 'food',
+        assetType: 'stock',
+        assetId: 'asset',
+        transactionType: 'buy',
+        tradedAt: '2026-03-03T12:00',
+        quantity: '1',
+        unitPrice: '10',
+        tradeCurrency: 'EUR',
+        fxRateToEur: '',
+        feesAmount: '0',
+        feesCurrency: 'EUR',
+        notes: '',
       }),
     ).toEqual({
       ok: false,
@@ -43,40 +50,85 @@ describe('finances panel workflow helpers', () => {
     expect(
       validateTransactionForm({
         accountId: '1',
-        postedAt: '2026-03-03',
-        amount: '0',
-        description: 'Coffee',
-        category: 'food',
+        assetType: 'stock',
+        assetId: '',
+        transactionType: 'buy',
+        tradedAt: '2026-03-03T12:00',
+        quantity: '0',
+        unitPrice: '0',
+        tradeCurrency: 'EUR',
+        fxRateToEur: '',
+        feesAmount: '0',
+        feesCurrency: 'EUR',
+        notes: '',
       }),
     ).toEqual({
       ok: false,
-      message: 'Amount must be a non-zero number.',
+      message: 'Select an asset type and an asset.',
     });
 
     expect(
       validateTransactionForm({
         accountId: '1',
-        postedAt: '2026-03-03',
-        amount: '-12.35',
-        description: ' Lunch ',
-        category: ' food ',
+        assetType: 'stock',
+        assetId: '2',
+        transactionType: 'dividend',
+        tradedAt: '2026-03-03T12:00',
+        quantity: '0',
+        unitPrice: '0',
+        tradeCurrency: 'EUR',
+        fxRateToEur: '',
+        feesAmount: '0',
+        feesCurrency: 'EUR',
+        notes: '',
+      }),
+    ).toEqual({
+      ok: false,
+      message: 'Dividend transactions are not supported in this app.',
+    });
+
+    expect(
+      validateTransactionForm({
+        accountId: '1',
+        assetType: 'stock',
+        assetId: '2',
+        transactionType: 'buy',
+        tradedAt: '2026-03-03T12:00',
+        quantity: '2',
+        unitPrice: '12.35',
+        tradeCurrency: 'EUR',
+        fxRateToEur: '',
+        feesAmount: '0.5',
+        feesCurrency: 'EUR',
+        notes: ' note ',
       }),
     ).toEqual({
       ok: true,
       normalized: {
         accountId: '1',
-        postedAt: '2026-03-03',
-        amount: -12.35,
-        description: 'Lunch',
-        category: 'food',
+        assetType: 'stock',
+        assetId: '2',
+        transactionType: 'buy',
+        tradedAt: '2026-03-03T12:00',
+        quantity: 2,
+        unitPrice: 12.35,
+        tradeCurrency: 'EUR',
+        fxRateToEur: null,
+        feesAmount: 0.5,
+        feesCurrency: 'EUR',
+        notes: 'note',
       },
     });
   });
 
   test('formats amounts and dates for display', () => {
     expect(formatMoney(1234.5)).toBe('$1,234.50');
-    expect(toInputDate('2026-03-01T12:30:00.000Z')).toBe('2026-03-01');
-    expect(toInputDate('invalid-date')).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(toInputDate('2026-03-01T12:30:00.000Z')).toMatch(
+      /^2026-03-01T12:30/,
+    );
+    expect(toInputDate('invalid-date')).toMatch(
+      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/,
+    );
   });
 
   test('maps API errors to UI messages', () => {

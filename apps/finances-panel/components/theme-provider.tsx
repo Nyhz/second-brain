@@ -1,0 +1,53 @@
+'use client';
+
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
+
+type ThemeMode = 'dark' | 'light';
+
+type ThemeContextValue = {
+  mode: ThemeMode;
+  setMode: (mode: ThemeMode) => void;
+};
+
+const ThemeContext = createContext<ThemeContextValue | null>(null);
+
+const KEY = 'sb-theme-mode';
+
+export function ThemeProvider({ children }: { children: ReactNode }) {
+  const [mode, setMode] = useState<ThemeMode>('dark');
+
+  useEffect(() => {
+    const raw = window.localStorage.getItem(KEY);
+    const next: ThemeMode = raw === 'light' ? 'light' : 'dark';
+    setMode(next);
+    document.documentElement.setAttribute('data-theme', next);
+  }, []);
+
+  const setThemeMode = (nextMode: ThemeMode) => {
+    setMode(nextMode);
+    document.documentElement.setAttribute('data-theme', nextMode);
+    window.localStorage.setItem(KEY, nextMode);
+  };
+
+  const value = useMemo(
+    () => ({ mode, setMode: setThemeMode }),
+    [mode, setThemeMode],
+  );
+
+  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
+}
+
+export const useThemeMode = () => {
+  const value = useContext(ThemeContext);
+  if (!value) {
+    throw new Error('useThemeMode must be used inside ThemeProvider');
+  }
+  return value;
+};

@@ -5,6 +5,7 @@ import type {
   ServiceStatus,
   ServiceStatusHistoryResponse,
 } from '@second-brain/types';
+import { Button, Modal } from './ui';
 import { useMemo, useState } from 'react';
 
 type OperationsStatusProps = {
@@ -24,6 +25,12 @@ const statusLabel = (status: ServiceStatus) => {
   if (status === 'down') return 'Down';
   return 'Unknown';
 };
+
+const formatDateTime = (value: string) =>
+  `${new Date(value).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
+
+const formatHour = (value: string) =>
+  new Date(value).toISOString().slice(11, 16);
 
 export function OperationsStatus({ initialHistory }: OperationsStatusProps) {
   const [isChecking, setIsChecking] = useState(false);
@@ -52,10 +59,7 @@ export function OperationsStatus({ initialHistory }: OperationsStatusProps) {
       return {
         hourIso: point.hourIso,
         label: showLabel
-          ? new Date(point.hourIso).toLocaleTimeString([], {
-              hour: '2-digit',
-              minute: '2-digit',
-            })
+          ? formatHour(point.hourIso)
           : '',
       };
     });
@@ -92,13 +96,14 @@ export function OperationsStatus({ initialHistory }: OperationsStatusProps) {
             Hourly probes for API, Worker, and Caddy over the last 24 hours.
           </p>
         </div>
-        <button
+        <Button
           type="button"
           onClick={() => void runCheckNow()}
           disabled={isChecking}
+          variant="primary"
         >
           {isChecking ? 'Checking...' : 'Check now'}
-        </button>
+        </Button>
       </div>
 
       {errorMessage ? <p className="status-error">{errorMessage}</p> : null}
@@ -129,7 +134,7 @@ export function OperationsStatus({ initialHistory }: OperationsStatusProps) {
                 <div
                   key={`${service.service}-${point.hourIso}`}
                   className={`timeline-point ${statusClass(point.status)}`}
-                  title={`${new Date(point.hourIso).toLocaleString()} · ${statusLabel(point.status)}${point.httpStatus ? ` · HTTP ${point.httpStatus}` : ''}${point.latencyMs !== null ? ` · ${point.latencyMs}ms` : ''}`}
+                  title={`${formatDateTime(point.hourIso)} · ${statusLabel(point.status)}${point.httpStatus ? ` · HTTP ${point.httpStatus}` : ''}${point.latencyMs !== null ? ` · ${point.latencyMs}ms` : ''}`}
                 />
               ))}
             </div>
@@ -143,7 +148,7 @@ export function OperationsStatus({ initialHistory }: OperationsStatusProps) {
       </div>
       <div className="timeline-range">
         <span>24h ago</span>
-        <span>Now</span>
+        <span>Latest data</span>
       </div>
       <ul className="status-legend" aria-label="Status color legend">
         <li>
@@ -161,23 +166,15 @@ export function OperationsStatus({ initialHistory }: OperationsStatusProps) {
         </li>
       </ul>
 
-      {modalOpen && checkNow ? (
-        <dialog
-          className="modal-card"
-          open
-          aria-label="Live service status"
-          onClose={() => setModalOpen(false)}
-        >
-          <div className="modal-backdrop" aria-hidden="true" />
-          <div className="modal-surface">
-            <div className="modal-head">
-              <h3>Live service status</h3>
-              <button type="button" onClick={() => setModalOpen(false)}>
-                Close
-              </button>
-            </div>
+      <Modal
+        open={modalOpen && checkNow !== null}
+        title="Live service status"
+        onClose={() => setModalOpen(false)}
+      >
+        {checkNow ? (
+          <>
             <p className="modal-ts">
-              Checked at {new Date(checkNow.checkedAt).toLocaleString()}
+              Checked at {formatDateTime(checkNow.checkedAt)}
             </p>
             <div className="modal-list">
               {checkNow.results.map((result) => (
@@ -196,17 +193,15 @@ export function OperationsStatus({ initialHistory }: OperationsStatusProps) {
                         : 'No HTTP code'}
                     </span>
                     <span>
-                      {result.latencyMs !== null
-                        ? `${result.latencyMs}ms`
-                        : '-'}
+                      {result.latencyMs !== null ? `${result.latencyMs}ms` : '-'}
                     </span>
                   </div>
                 </div>
               ))}
             </div>
-          </div>
-        </dialog>
-      ) : null}
+          </>
+        ) : null}
+      </Modal>
     </section>
   );
 }

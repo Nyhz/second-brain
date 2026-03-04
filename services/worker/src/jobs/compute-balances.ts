@@ -8,11 +8,12 @@ export const computeDailyBalances = async (
   await sql`
     insert into finances.daily_balances (account_id, balance_date, balance)
     select
-      account_id,
+      a.id as account_id,
       current_date,
-      sum(amount)::numeric(18,2) as balance
-    from finances.transactions
-    group by account_id
+      (a.opening_balance_eur + coalesce(sum(at.cash_impact_eur), 0))::numeric(18,2) as balance
+    from finances.accounts a
+    left join finances.asset_transactions at on at.account_id = a.id
+    group by a.id, a.opening_balance_eur
     on conflict (account_id, balance_date)
     do update set balance = excluded.balance
   `;

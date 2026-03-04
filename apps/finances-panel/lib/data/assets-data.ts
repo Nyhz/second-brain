@@ -1,59 +1,60 @@
 import type { AssetWithPosition } from '@second-brain/types';
-import { getMarkets } from '../mock/markets';
-import {
-  getAllocation,
-  getHoldings,
-  getPortfolioSeries,
-} from '../mock/portfolio';
+import type { HoldingRow, MarketRow, TimePoint } from '../dashboard-types';
 import { tryApi } from './shared';
 
+const COLORS = ['#e5e7eb', '#9ca3af', '#6b7280', '#4b5563', '#374151'];
+
 export const loadAssetsData = async () => {
-  const rows = await tryApi<AssetWithPosition[]>('/finances/assets');
-  if (rows && rows.length > 0) {
-    const holdings = rows.map((asset) => ({
-      symbol: asset.symbol ?? asset.name.slice(0, 5).toUpperCase(),
-      name: asset.name,
-      type: asset.assetType,
-      quantity: asset.position?.quantity ?? 1,
-      price: asset.resolvedUnitPrice ?? 0,
-      value: asset.currentValue ?? 0,
-      dayChangePct: 0,
-      sparkline: [
-        { value: (asset.currentValue ?? 0) * 0.95 },
-        { value: asset.currentValue ?? 0 },
-      ],
-    }));
+  const rows = (await tryApi<AssetWithPosition[]>('/finances/assets')) ?? [];
+  const marketRows =
+    (await tryApi<
+      Array<{
+        symbol: string;
+        price: number;
+        source: string;
+      }>
+    >('/finances/markets/latest?limit=50')) ?? [];
 
-    const byType = new Map<string, number>();
-    for (const row of holdings) {
-      byType.set(row.type, (byType.get(row.type) ?? 0) + row.value);
-    }
-    const total = holdings.reduce((sum, row) => sum + row.value, 0);
-    const allocation = [...byType.entries()].map(([label, value], idx) => ({
-      label,
-      value,
-      percent: total === 0 ? 0 : Number(((value / total) * 100).toFixed(2)),
-      color:
-        ['#22d3ee', '#60a5fa', '#34d399', '#f59e0b', '#a78bfa'][idx % 5] ??
-        '#22d3ee',
-    }));
+  const holdings: HoldingRow[] = rows.map((asset) => ({
+    symbol: asset.symbol ?? asset.ticker ?? asset.name.slice(0, 5).toUpperCase(),
+    name: asset.name,
+    type: asset.assetType,
+    quantity: asset.position?.quantity ?? 0,
+    price: asset.resolvedUnitPrice ?? 0,
+    value: asset.currentValue ?? 0,
+    dayChangePct: 0,
+    sparkline: [],
+  }));
 
-    return {
-      source: 'api' as const,
-      rows,
-      holdings,
-      allocation,
-      series: getPortfolioSeries(),
-      markets: getMarkets(),
-    };
+  const byType = new Map<string, number>();
+  for (const row of holdings) {
+    byType.set(row.type, (byType.get(row.type) ?? 0) + row.value);
   }
+  const total = holdings.reduce((sum, row) => sum + row.value, 0);
+  const allocation = [...byType.entries()].map(([label, value], idx) => ({
+    label,
+    value,
+    percent: total === 0 ? 0 : Number(((value / total) * 100).toFixed(2)),
+    color: COLORS[idx % COLORS.length] ?? COLORS[0] ?? '#e5e7eb',
+  }));
+
+  const markets: MarketRow[] = marketRows.map((row) => ({
+    symbol: row.symbol,
+    name: row.symbol,
+    category: 'stock',
+    price: row.price,
+    dayChangePct: 0,
+    volume: 0,
+    sparkline: [],
+  }));
+
+  const series: TimePoint[] = [];
 
   return {
-    source: 'mock' as const,
-    rows: [],
-    holdings: getHoldings(),
-    allocation: getAllocation(),
-    series: getPortfolioSeries(),
-    markets: getMarkets(),
-  };
+    rows,
+    holdings,
+    allocation,
+    series,
+    markets,
+  } as const;
 };

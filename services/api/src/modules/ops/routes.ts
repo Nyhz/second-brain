@@ -94,6 +94,13 @@ export const registerOpsRoutes = (
       }
 
       const hours = Math.max(1, Math.min(168, Math.floor(hoursRaw || 24)));
+      const now = new Date();
+      const nowHour = new Date(now);
+      nowHour.setUTCMinutes(0, 0, 0);
+      const queryWindowStart = new Date(nowHour);
+      queryWindowStart.setUTCHours(queryWindowStart.getUTCHours() - hours);
+
+      const queryWindowStartIso = queryWindowStart.toISOString();
 
       const rows = await db.execute(sql`
       select
@@ -103,14 +110,22 @@ export const registerOpsRoutes = (
         http_status as "httpStatus",
         latency_ms as "latencyMs"
       from core.service_health_checks
-      where checked_at >= now() - (${hours} || ' hours')::interval
+      where checked_at >= ${queryWindowStartIso}
       order by checked_at asc
     `);
 
       const services: ServiceName[] = ['api', 'worker', 'caddy'];
-      const now = new Date();
-      const start = new Date(now);
-      start.setUTCMinutes(0, 0, 0);
+      const nowHourIso = bucketHourIso(nowHour);
+      const hasCurrentHourData = rows.some(
+        (row) => bucketHourIso(new Date(String(row.checkedAt))) === nowHourIso,
+      );
+
+      const end = new Date(nowHour);
+      if (!hasCurrentHourData) {
+        end.setUTCHours(end.getUTCHours() - 1);
+      }
+
+      const start = new Date(end);
       start.setUTCHours(start.getUTCHours() - (hours - 1));
 
       const hourSlots = Array.from({ length: hours }, (_, index) => {

@@ -1,69 +1,84 @@
 'use client';
 
-import type { Account, Transaction } from '@second-brain/types';
+import type {
+  Account,
+  AssetTransaction,
+  AssetTransactionType,
+  AssetType,
+  AssetWithPosition,
+} from '@second-brain/types';
 import {
-  AllocationDonutChart,
+  Button,
   Card,
   DataTable,
+  EmptyState,
   KpiCard,
-} from '@second-brain/ui';
+  Modal,
+} from '../../components/ui';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { apiRequest } from '../../lib/api';
 import { loadAccountsData } from '../../lib/data/accounts-data';
+import { loadAssetsData } from '../../lib/data/assets-data';
 import { loadTransactionsData } from '../../lib/data/transactions-data';
 import { getApiErrorMessage } from '../../lib/errors';
-import { formatMoney } from '../../lib/format';
+import { formatDateTime, formatMoney } from '../../lib/format';
 import {
   type TransactionFormInput,
-  toInputDate,
   validateTransactionForm,
 } from '../../lib/transactions';
 
 const initialForm = (accountId = ''): TransactionFormInput => ({
   accountId,
-  postedAt: new Date().toISOString().slice(0, 10),
-  amount: '',
-  description: '',
-  category: '',
+  assetType: 'stock',
+  assetId: '',
+  transactionType: 'buy',
+  tradedAt: new Date().toISOString().slice(0, 16),
+  quantity: '',
+  unitPrice: '',
+  tradeCurrency: 'EUR',
+  fxRateToEur: '',
+  feesAmount: '0',
+  feesCurrency: 'EUR',
+  notes: '',
 });
+
+type TaxSummary = {
+  year: number;
+  realizedGainLossEur: number;
+};
+
+const txTypes: AssetTransactionType[] = ['buy', 'sell', 'fee'];
 
 export default function TransactionsPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [rows, setRows] = useState<Transaction[]>([]);
-  const [source, setSource] = useState<'api' | 'mock'>('mock');
+  const [assets, setAssets] = useState<AssetWithPosition[]>([]);
+  const [rows, setRows] = useState<AssetTransaction[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [isUpdating, setIsUpdating] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [isTaxLoading, setIsTaxLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [taxSummary, setTaxSummary] = useState<TaxSummary | null>(null);
+  const [taxYear, setTaxYear] = useState(new Date().getUTCFullYear());
 
   const [form, setForm] = useState<TransactionFormInput>(initialForm());
-  const [editForm, setEditForm] = useState<TransactionFormInput>(initialForm());
 
   const load = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [accountsData, transactionsData] = await Promise.all([
+      const [accountsData, assetsData, transactionsData] = await Promise.all([
         loadAccountsData(),
+        loadAssetsData(),
         loadTransactionsData(),
       ]);
 
       setAccounts(accountsData.rows);
+      setAssets(assetsData.rows);
       setRows(transactionsData.rows);
-      setSource(
-        accountsData.source === 'api' || transactionsData.source === 'api'
-          ? 'api'
-          : 'mock',
-      );
 
       const defaultAccountId = accountsData.rows[0]?.id ?? '';
       setForm((current) => ({
-        ...current,
-        accountId: current.accountId || defaultAccountId,
-      }));
-      setEditForm((current) => ({
         ...current,
         accountId: current.accountId || defaultAccountId,
       }));
@@ -75,9 +90,81 @@ export default function TransactionsPage() {
     }
   }, []);
 
+  const loadTaxSummary = useCallback(async () => {
+    setIsTaxLoading(true);
+    try {
+      const data = await apiRequest<{
+        year: number;
+        realizedGainLossEur: number;
+      }>(`/finances/tax/yearly-summary?year=${taxYear}`);
+      setTaxSummary({
+        year: data.year,
+        realizedGainLossEur: data.realizedGainLossEur,
+      });
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(getApiErrorMessage(error));
+    } finally {
+      setIsTaxLoading(false);
+    }
+  }, [taxYear]);
+
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    void loadTaxSummary();
+  }, [loadTaxSummary]);
+
+  const filteredAssets = useMemo(() => {
+    return assets.filter(
+      (asset) => asset.assetType === form.assetType && asset.isActive,
+    );
+  }, [assets, form.assetType]);
+
+  useEffect(() => {
+    if (!filteredAssets.find((asset) => asset.id === form.assetId)) {
+      setForm((current) => ({
+        ...current,
+        assetId: filteredAssets[0]?.id ?? '',
+      }));
+    }
+  }, [filteredAssets, form.assetId]);
+
+  const selectedAccount = useMemo(
+    () => accounts.find((account) => account.id === form.accountId) ?? null,
+    [accounts, form.accountId],
+  );
+
+  const cashImpactPreview = useMemo(() => {
+    const quantity = Number(form.quantity || '0');
+    const unitPrice = Number(form.unitPrice || '0');
+    const feesAmount = Number(form.feesAmount || '0');
+    const fxRate = Number(form.fxRateToEur || '0');
+    const currency = form.tradeCurrency.trim().toUpperCase();
+
+    const toEur = (value: number) => {
+      if (currency === 'EUR') {
+        return value;
+      }
+      if (!Number.isFinite(fxRate) || fxRate <= 0) {
+        return Number.NaN;
+      }
+      return value * fxRate;
+    };
+
+    if (form.transactionType === 'buy') {
+      return -(toEur(quantity * unitPrice) + toEur(feesAmount));
+    }
+    if (form.transactionType === 'sell') {
+      return toEur(quantity * unitPrice) - toEur(feesAmount);
+    }
+    if (form.transactionType === 'fee') {
+      return -toEur(feesAmount);
+    }
+    return 0;
+  }, [form]);
 
   const createTransaction = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -89,12 +176,13 @@ export default function TransactionsPage() {
 
     setIsSaving(true);
     try {
-      await apiRequest('/finances/transactions', {
+      await apiRequest('/finances/asset-transactions', {
         method: 'POST',
         body: JSON.stringify(validation.normalized),
       });
       setForm(initialForm(validation.normalized.accountId));
-      await load();
+      setIsCreateModalOpen(false);
+      await Promise.all([load(), loadTaxSummary()]);
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
     } finally {
@@ -102,104 +190,36 @@ export default function TransactionsPage() {
     }
   };
 
-  const startEditing = (row: Transaction) => {
-    setEditingId(row.id);
-    setEditForm({
-      accountId: row.accountId,
-      postedAt: toInputDate(row.postedAt),
-      amount: String(row.amount),
-      description: row.description,
-      category: row.category,
-    });
-    setErrorMessage(null);
-  };
-
-  const updateTransaction = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!editingId) {
-      return;
-    }
-
-    const validation = validateTransactionForm(editForm);
-    if (!validation.ok) {
-      setErrorMessage(validation.message);
-      return;
-    }
-
-    setIsUpdating(true);
-    try {
-      await apiRequest(`/finances/transactions/${editingId}`, {
-        method: 'PATCH',
-        body: JSON.stringify(validation.normalized),
-      });
-      setEditingId(null);
-      setEditForm(initialForm(editForm.accountId));
-      await load();
-    } catch (error) {
-      setErrorMessage(getApiErrorMessage(error));
-    } finally {
-      setIsUpdating(false);
-    }
-  };
-
-  const deleteTransaction = async (id: string) => {
-    setDeletingId(id);
-    try {
-      await apiRequest(`/finances/transactions/${id}`, { method: 'DELETE' });
-      if (editingId === id) {
-        setEditingId(null);
-      }
-      await load();
-    } catch (error) {
-      setErrorMessage(getApiErrorMessage(error));
-    } finally {
-      setDeletingId(null);
-    }
-  };
-
-  const inflow = useMemo(() => {
+  const totalBuys = useMemo(() => {
     return rows
-      .filter((row) => row.amount > 0)
-      .reduce((sum, row) => sum + row.amount, 0);
+      .filter((row) => row.transactionType === 'buy')
+      .reduce((sum, row) => sum + Math.abs(row.cashImpactEur), 0);
   }, [rows]);
 
-  const outflow = useMemo(() => {
+  const totalSells = useMemo(() => {
     return rows
-      .filter((row) => row.amount < 0)
-      .reduce((sum, row) => sum + Math.abs(row.amount), 0);
+      .filter((row) => row.transactionType === 'sell')
+      .reduce((sum, row) => sum + row.cashImpactEur, 0);
   }, [rows]);
 
-  const categorySummary = useMemo(() => {
-    const byCategory = new Map<string, number>();
-    for (const row of rows) {
-      const amount = Math.abs(row.amount);
-      byCategory.set(
-        row.category,
-        (byCategory.get(row.category) ?? 0) + amount,
-      );
-    }
-
-    const total = [...byCategory.values()].reduce(
-      (sum, value) => sum + value,
-      0,
-    );
-    const palette = ['#34d399', '#60a5fa', '#f59e0b', '#a78bfa', '#22d3ee'];
-    return [...byCategory.entries()].map(([label, value], index) => ({
-      label,
-      value,
-      percent: total === 0 ? 0 : Number(((value / total) * 100).toFixed(2)),
-      color: palette[index % palette.length] ?? '#34d399',
-    }));
+  const totalFees = useMemo(() => {
+    return rows
+      .filter((row) => row.transactionType === 'fee')
+      .reduce((sum, row) => sum + Math.abs(row.cashImpactEur), 0);
   }, [rows]);
 
   return (
-    <div className="grid" style={{ gap: '1rem' }}>
-      <header>
-        <h1>Transactions</h1>
-        <p className="small">
-          Activity ledger with category composition and live CRUD.
-        </p>
-        <p className="small">Source: {source.toUpperCase()}</p>
+    <div className="page-stack">
+      <header className="page-header">
+        <div>
+          <h1>Investment Transactions</h1>
+          <p className="small">
+            Register buys, sells, and fees with source-account cash control.
+          </p>
+        </div>
+        <Button variant="primary" onClick={() => setIsCreateModalOpen(true)}>
+          Create Transaction
+        </Button>
       </header>
 
       {errorMessage ? (
@@ -208,206 +228,83 @@ export default function TransactionsPage() {
         </p>
       ) : null}
 
-      <section
-        className="grid kpi"
-        style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))' }}
-      >
-        <KpiCard label="Monthly Inflow" value={formatMoney(inflow)} />
-        <KpiCard label="Monthly Outflow" value={formatMoney(outflow)} />
-        <KpiCard label="Net Flow" value={formatMoney(inflow - outflow)} />
+      <section className="sb-grid-kpi">
+        <KpiCard label="Buy Outflows" value={formatMoney(totalBuys)} />
+        <KpiCard label="Sell Inflows" value={formatMoney(totalSells)} />
+        <KpiCard label="Fee Outflows" value={formatMoney(totalFees)} />
       </section>
 
-      <div className="grid two-col" style={{ gap: '1rem' }}>
-        <Card title="Create Transaction">
-          <form className="form-grid" onSubmit={createTransaction}>
-            <select
-              value={form.accountId}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  accountId: event.target.value,
-                }))
-              }
-              required
+      <div className="section-stack">
+        <Card title="Year-End Tax Summary">
+          <div className="form-grid">
+            <input
+              type="number"
+              value={taxYear}
+              onChange={(event) => setTaxYear(Number(event.target.value))}
+              min={2000}
+              max={2100}
+            />
+            <button
+              type="button"
+              onClick={() => void loadTaxSummary()}
+              disabled={isTaxLoading}
             >
-              <option value="">Select account</option>
-              {accounts.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {account.name}
-                </option>
-              ))}
-            </select>
-            <input
-              type="date"
-              value={form.postedAt}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  postedAt: event.target.value,
-                }))
-              }
-              required
-            />
-            <input
-              value={form.amount}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  amount: event.target.value,
-                }))
-              }
-              placeholder="Amount (e.g. -240 or 5800)"
-              required
-            />
-            <input
-              value={form.description}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  description: event.target.value,
-                }))
-              }
-              placeholder="Description"
-              required
-            />
-            <input
-              value={form.category}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  category: event.target.value,
-                }))
-              }
-              placeholder="Category"
-              required
-            />
-            <button type="submit" disabled={isSaving || accounts.length === 0}>
-              {isSaving ? 'Saving...' : 'Create Transaction'}
+              {isTaxLoading ? 'Loading...' : 'Refresh Summary'}
             </button>
-          </form>
-        </Card>
-
-        <Card title="Flow Composition">
-          <AllocationDonutChart data={categorySummary} />
+            {taxSummary ? (
+              <>
+                <p className="small">Year: {taxSummary.year}</p>
+                <p className="small">
+                  Realized Gain/Loss:{' '}
+                  {formatMoney(taxSummary.realizedGainLossEur)}
+                </p>
+              </>
+            ) : (
+              <p className="small">No summary loaded.</p>
+            )}
+          </div>
         </Card>
       </div>
 
-      {editingId ? (
-        <Card title="Edit Transaction">
-          <form className="form-grid" onSubmit={updateTransaction}>
-            <select
-              value={editForm.accountId}
-              onChange={(event) =>
-                setEditForm((current) => ({
-                  ...current,
-                  accountId: event.target.value,
-                }))
-              }
-              required
-            >
-              <option value="">Select account</option>
-              {accounts.map((account) => (
-                <option key={account.id} value={account.id}>
-                  {account.name}
-                </option>
-              ))}
-            </select>
-            <input
-              type="date"
-              value={editForm.postedAt}
-              onChange={(event) =>
-                setEditForm((current) => ({
-                  ...current,
-                  postedAt: event.target.value,
-                }))
-              }
-              required
-            />
-            <input
-              value={editForm.amount}
-              onChange={(event) =>
-                setEditForm((current) => ({
-                  ...current,
-                  amount: event.target.value,
-                }))
-              }
-              required
-            />
-            <input
-              value={editForm.description}
-              onChange={(event) =>
-                setEditForm((current) => ({
-                  ...current,
-                  description: event.target.value,
-                }))
-              }
-              required
-            />
-            <input
-              value={editForm.category}
-              onChange={(event) =>
-                setEditForm((current) => ({
-                  ...current,
-                  category: event.target.value,
-                }))
-              }
-              required
-            />
-            <div className="top-nav-actions">
-              <button type="submit" disabled={isUpdating}>
-                {isUpdating ? 'Updating...' : 'Save Changes'}
-              </button>
-              <button type="button" onClick={() => setEditingId(null)}>
-                Cancel
-              </button>
-            </div>
-          </form>
-        </Card>
-      ) : null}
-
-      <Card title="Transactions Table">
+      <Card title="Asset Transactions Table">
         {isLoading ? (
           <p className="small">Loading transactions...</p>
+        ) : rows.length === 0 ? (
+          <EmptyState message="No transactions yet." />
         ) : (
           <DataTable
             columns={[
               {
-                key: 'date',
+                key: 'tradedAt',
                 header: 'Date',
-                render: (row: Transaction) => toInputDate(row.postedAt),
+                render: (row: AssetTransaction) => formatDateTime(row.tradedAt),
               },
               {
-                key: 'description',
-                header: 'Description',
-                render: (row: Transaction) => row.description,
+                key: 'type',
+                header: 'Type',
+                render: (row: AssetTransaction) => row.transactionType,
               },
               {
-                key: 'category',
-                header: 'Category',
-                render: (row: Transaction) => row.category,
+                key: 'asset',
+                header: 'Asset Type',
+                render: (row: AssetTransaction) => row.assetType,
               },
               {
-                key: 'amount',
-                header: 'Amount',
-                render: (row: Transaction) => formatMoney(row.amount),
+                key: 'qty',
+                header: 'Qty',
+                render: (row: AssetTransaction) => row.quantity.toString(),
               },
               {
-                key: 'actions',
-                header: 'Actions',
-                render: (row: Transaction) => (
-                  <div className="top-nav-actions">
-                    <button type="button" onClick={() => startEditing(row)}>
-                      Edit
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void deleteTransaction(row.id)}
-                      disabled={deletingId === row.id}
-                    >
-                      {deletingId === row.id ? 'Deleting...' : 'Delete'}
-                    </button>
-                  </div>
-                ),
+                key: 'price',
+                header: 'Unit Price',
+                render: (row: AssetTransaction) =>
+                  `${row.unitPrice.toFixed(4)} ${row.tradeCurrency}`,
+              },
+              {
+                key: 'cash',
+                header: 'Cash Impact EUR',
+                render: (row: AssetTransaction) =>
+                  formatMoney(row.cashImpactEur),
               },
             ]}
             rows={rows}
@@ -415,6 +312,190 @@ export default function TransactionsPage() {
           />
         )}
       </Card>
+
+      <Modal
+        open={isCreateModalOpen}
+        title="Create Investment Transaction"
+        onClose={() => {
+          if (!isSaving) {
+            setIsCreateModalOpen(false);
+          }
+        }}
+      >
+        <form className="form-grid" onSubmit={createTransaction}>
+          <select
+            value={form.accountId}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                accountId: event.target.value,
+              }))
+            }
+            required
+          >
+            <option value="">Select account</option>
+            {accounts.map((account) => (
+              <option key={account.id} value={account.id}>
+                {account.name} ({formatMoney(account.currentCashBalanceEur)})
+              </option>
+            ))}
+          </select>
+          <select
+            value={form.assetType}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                assetType: event.target.value as AssetType,
+                assetId: '',
+              }))
+            }
+          >
+            {[
+              'stock',
+              'etf',
+              'mutual_fund',
+              'retirement_fund',
+              'real_estate',
+              'bond',
+              'crypto',
+              'cash_equivalent',
+              'other',
+            ].map((type) => (
+              <option key={type} value={type}>
+                {type}
+              </option>
+            ))}
+          </select>
+          <select
+            value={form.assetId}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                assetId: event.target.value,
+              }))
+            }
+            required
+          >
+            <option value="">Select asset</option>
+            {filteredAssets.map((asset) => (
+              <option key={asset.id} value={asset.id}>
+                {asset.ticker} · {asset.name}
+              </option>
+            ))}
+          </select>
+          <select
+            value={form.transactionType}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                transactionType: event.target.value as AssetTransactionType,
+              }))
+            }
+          >
+            {txTypes.map((type) => (
+              <option key={type} value={type}>
+                {type}
+              </option>
+            ))}
+          </select>
+          <input
+            type="datetime-local"
+            value={form.tradedAt}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                tradedAt: event.target.value,
+              }))
+            }
+            required
+          />
+          <input
+            value={form.quantity}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                quantity: event.target.value,
+              }))
+            }
+            placeholder="Quantity"
+          />
+          <input
+            value={form.unitPrice}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                unitPrice: event.target.value,
+              }))
+            }
+            placeholder="Unit price"
+          />
+          <input
+            value={form.tradeCurrency}
+            maxLength={3}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                tradeCurrency: event.target.value.toUpperCase(),
+              }))
+            }
+            placeholder="Trade currency"
+            required
+          />
+          <input
+            value={form.fxRateToEur}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                fxRateToEur: event.target.value,
+              }))
+            }
+            placeholder="FX to EUR (if needed)"
+          />
+          <input
+            value={form.feesAmount}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                feesAmount: event.target.value,
+              }))
+            }
+            placeholder="Fees amount"
+          />
+          <input
+            value={form.feesCurrency}
+            maxLength={3}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                feesCurrency: event.target.value.toUpperCase(),
+              }))
+            }
+            placeholder="Fees currency"
+          />
+          <input
+            value={form.notes}
+            onChange={(event) =>
+              setForm((current) => ({
+                ...current,
+                notes: event.target.value,
+              }))
+            }
+            placeholder="Notes"
+          />
+          <p className="small">
+            Cash impact preview:{' '}
+            {Number.isFinite(cashImpactPreview)
+              ? formatMoney(cashImpactPreview)
+              : 'requires FX'}
+            {selectedAccount
+              ? ` · Account cash: ${formatMoney(selectedAccount.currentCashBalanceEur)}`
+              : ''}
+          </p>
+          <Button type="submit" variant="primary" disabled={isSaving} fullWidth>
+            {isSaving ? 'Saving...' : 'Create Transaction'}
+          </Button>
+        </form>
+      </Modal>
     </div>
   );
 }

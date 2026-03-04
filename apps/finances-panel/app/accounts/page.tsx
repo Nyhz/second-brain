@@ -1,24 +1,32 @@
 'use client';
 
 import type { Account } from '@second-brain/types';
-import { Card, DataTable, KpiCard, PriceLineChart } from '@second-brain/ui';
+import {
+  Button,
+  Card,
+  DataTable,
+  EmptyState,
+  KpiCard,
+  Modal,
+  PriceLineChart,
+} from '../../components/ui';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { apiRequest } from '../../lib/api';
 import { loadAccountsData } from '../../lib/data/accounts-data';
 import { getApiErrorMessage } from '../../lib/errors';
-import { formatMoney } from '../../lib/format';
-import { buildSeries, dayKey } from '../../lib/mock/seed';
+import { formatDate, formatMoney } from '../../lib/format';
 
 export default function AccountsPage() {
   const [rows, setRows] = useState<Account[]>([]);
-  const [source, setSource] = useState<'api' | 'mock'>('mock');
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [name, setName] = useState('');
   const [currency, setCurrency] = useState('USD');
+  const [openingBalanceEur, setOpeningBalanceEur] = useState('0');
   const [accountType, setAccountType] = useState('checking');
 
   const load = useCallback(async () => {
@@ -26,7 +34,6 @@ export default function AccountsPage() {
     try {
       const data = await loadAccountsData();
       setRows(data.rows);
-      setSource(data.source);
       setErrorMessage(null);
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
@@ -53,11 +60,15 @@ export default function AccountsPage() {
         body: JSON.stringify({
           name: name.trim(),
           currency: currency.toUpperCase(),
+          baseCurrency: 'EUR',
+          openingBalanceEur: Number(openingBalanceEur || '0'),
           accountType,
         }),
       });
       setName('');
       setCurrency('USD');
+      setOpeningBalanceEur('0');
+      setIsCreateModalOpen(false);
       await load();
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
@@ -67,20 +78,25 @@ export default function AccountsPage() {
   };
 
   const netCash = useMemo(() => {
-    return rows.reduce(
-      (sum, row) => sum + (row.accountType === 'credit' ? -500 : 1000),
-      0,
-    );
+    return rows.reduce((sum, row) => sum + row.currentCashBalanceEur, 0);
   }, [rows]);
 
-  const positive = rows.filter((row) => row.accountType !== 'credit').length;
+  const positive = rows.filter((row) => row.currentCashBalanceEur >= 0).length;
+  const chartRows = rows.map((row) => ({
+    label: row.name.slice(0, 10),
+    value: row.currentCashBalanceEur,
+  }));
 
   return (
-    <div className="grid" style={{ gap: '1rem' }}>
-      <header>
-        <h1>Accounts</h1>
-        <p className="small">Liquidity and cash-flow accounts overview.</p>
-        <p className="small">Source: {source.toUpperCase()}</p>
+    <div className="page-stack">
+      <header className="page-header">
+        <div>
+          <h1>Accounts</h1>
+          <p className="small">Liquidity and cash-flow accounts overview.</p>
+        </div>
+        <Button variant="primary" onClick={() => setIsCreateModalOpen(true)}>
+          Create Account
+        </Button>
       </header>
       {errorMessage ? (
         <p className="small" style={{ color: '#f87171' }}>
@@ -88,60 +104,25 @@ export default function AccountsPage() {
         </p>
       ) : null}
 
-      <section
-        className="grid kpi"
-        style={{ gridTemplateColumns: 'repeat(auto-fit,minmax(220px,1fr))' }}
-      >
-        <KpiCard label="Net Cash (Estimated)" value={formatMoney(netCash)} />
-        <KpiCard label="Positive Accounts" value={String(positive)} />
-        <KpiCard label="Report Date" value={dayKey()} />
+      <section className="sb-grid-kpi">
+        <KpiCard label="Net Cash (EUR)" value={formatMoney(netCash)} />
+        <KpiCard label="Non-Negative Accounts" value={String(positive)} />
+        <KpiCard label="Report Date" value={formatDate(new Date().toISOString())} />
       </section>
 
-      <div className="grid two-col" style={{ gap: '1rem' }}>
-        <Card title="Add Account">
-          <form className="form-grid" onSubmit={createAccount}>
-            <input
-              value={name}
-              placeholder="Account name"
-              onChange={(e) => setName(e.target.value)}
-              required
-            />
-            <input
-              value={currency}
-              maxLength={3}
-              placeholder="Currency"
-              onChange={(e) => setCurrency(e.target.value.toUpperCase())}
-              required
-            />
-            <select
-              value={accountType}
-              onChange={(e) => setAccountType(e.target.value)}
-            >
-              <option value="checking">Checking</option>
-              <option value="savings">Savings</option>
-              <option value="cash">Cash</option>
-              <option value="credit">Credit</option>
-            </select>
-            <button type="submit" disabled={isCreating}>
-              {isCreating ? 'Creating...' : 'Create Account'}
-            </button>
-          </form>
-        </Card>
-
-        <Card title="Cash Balance Trend">
-          <PriceLineChart
-            data={buildSeries(
-              `accounts-${dayKey()}`,
-              20,
-              Math.max(netCash, 5000),
-            )}
-          />
-        </Card>
-      </div>
+      <Card title="Cash Balance Trend">
+        {chartRows.length === 0 ? (
+          <EmptyState message="No account balances to chart yet." />
+        ) : (
+          <PriceLineChart data={chartRows} />
+        )}
+      </Card>
 
       <Card title="Accounts Table">
         {isLoading ? (
           <p className="small">Loading accounts...</p>
+        ) : rows.length === 0 ? (
+          <EmptyState message="No accounts yet." />
         ) : (
           <DataTable
             columns={[
@@ -161,10 +142,15 @@ export default function AccountsPage() {
                 render: (row: Account) => row.currency,
               },
               {
+                key: 'cash',
+                header: 'Cash EUR',
+                render: (row: Account) =>
+                  formatMoney(row.currentCashBalanceEur),
+              },
+              {
                 key: 'created',
                 header: 'Created',
-                render: (row: Account) =>
-                  new Date(row.createdAt).toLocaleDateString(),
+                render: (row: Account) => formatDate(row.createdAt),
               },
             ]}
             rows={rows}
@@ -172,6 +158,47 @@ export default function AccountsPage() {
           />
         )}
       </Card>
+
+      <Modal
+        open={isCreateModalOpen}
+        title="Create Account"
+        onClose={() => {
+          if (!isCreating) {
+            setIsCreateModalOpen(false);
+          }
+        }}
+      >
+        <form className="form-grid" onSubmit={createAccount}>
+          <input
+            value={name}
+            placeholder="Account name"
+            onChange={(e) => setName(e.target.value)}
+            required
+          />
+          <input
+            value={currency}
+            maxLength={3}
+            placeholder="Currency"
+            onChange={(e) => setCurrency(e.target.value.toUpperCase())}
+            required
+          />
+          <input
+            value={openingBalanceEur}
+            placeholder="Opening balance EUR"
+            onChange={(e) => setOpeningBalanceEur(e.target.value)}
+            required
+          />
+          <select value={accountType} onChange={(e) => setAccountType(e.target.value)}>
+            <option value="checking">Checking</option>
+            <option value="savings">Savings</option>
+            <option value="cash">Cash</option>
+            <option value="credit">Credit</option>
+          </select>
+          <Button type="submit" variant="primary" disabled={isCreating} fullWidth>
+            {isCreating ? 'Creating...' : 'Create Account'}
+          </Button>
+        </form>
+      </Modal>
     </div>
   );
 }

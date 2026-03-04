@@ -12,62 +12,41 @@ export const accountSchema = z.object({
   id: z.string().uuid(),
   name: z.string().min(1),
   currency: z.string().length(3),
-  accountType: z.enum(['checking', 'savings', 'cash', 'credit']),
+  baseCurrency: z.string().length(3),
+  openingBalanceEur: z.number(),
+  currentCashBalanceEur: z.number(),
+  accountType: z.enum([
+    'brokerage',
+    'crypto_exchange',
+    'investment_platform',
+    'checking',
+    'savings',
+    'cash',
+    'credit',
+  ]),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
 
 export type Account = z.infer<typeof accountSchema>;
 
-export const transactionSchema = z.object({
-  id: z.string().uuid(),
-  accountId: z.string().uuid(),
-  postedAt: z.string(),
-  amount: z.number(),
-  description: z.string().min(1),
-  category: z.string().min(1),
-  createdAt: z.string(),
-  updatedAt: z.string(),
-});
-
-export type Transaction = z.infer<typeof transactionSchema>;
-
 export const createAccountInputSchema = z.object({
   name: z.string().min(1),
   currency: z.string().length(3).default('USD'),
-  accountType: z.enum(['checking', 'savings', 'cash', 'credit']),
+  baseCurrency: z.literal('EUR').default('EUR'),
+  openingBalanceEur: z.number().nonnegative().default(0),
+  accountType: z.enum([
+    'brokerage',
+    'crypto_exchange',
+    'investment_platform',
+    'checking',
+    'savings',
+    'cash',
+    'credit',
+  ]),
 });
 
 export type CreateAccountInput = z.infer<typeof createAccountInputSchema>;
-
-export const createTransactionInputSchema = z.object({
-  accountId: z.string().uuid(),
-  postedAt: z.string(),
-  amount: z.number(),
-  description: z.string().min(1),
-  category: z.string().min(1),
-});
-
-export type CreateTransactionInput = z.infer<
-  typeof createTransactionInputSchema
->;
-
-export const updateTransactionInputSchema =
-  createTransactionInputSchema.partial();
-
-export type UpdateTransactionInput = z.infer<
-  typeof updateTransactionInputSchema
->;
-
-export const financesSummarySchema = z.object({
-  totalBalance: z.number(),
-  accountCount: z.number().int(),
-  transactionCount: z.number().int(),
-  monthlyInflow: z.number(),
-  monthlyOutflow: z.number(),
-});
-
-export type FinancesSummary = z.infer<typeof financesSummarySchema>;
 
 export const assetTypeSchema = z.enum([
   'stock',
@@ -83,6 +62,119 @@ export const assetTypeSchema = z.enum([
 
 export type AssetType = z.infer<typeof assetTypeSchema>;
 
+export const assetTransactionTypeSchema = z.enum([
+  'buy',
+  'sell',
+  'fee',
+  'dividend',
+]);
+export type AssetTransactionType = z.infer<typeof assetTransactionTypeSchema>;
+
+export const assetTransactionSchema = z.object({
+  id: z.string().uuid(),
+  accountId: z.string().uuid(),
+  assetId: z.string().uuid(),
+  assetType: assetTypeSchema,
+  transactionType: assetTransactionTypeSchema,
+  tradedAt: z.string(),
+  quantity: z.number(),
+  unitPrice: z.number(),
+  tradeCurrency: z.string().length(3),
+  fxRateToEur: z.number().nullable(),
+  cashImpactEur: z.number(),
+  feesAmount: z.number(),
+  feesCurrency: z.string().length(3).nullable(),
+  dividendGross: z.number().nullable(),
+  withholdingTax: z.number().nullable(),
+  dividendNet: z.number().nullable(),
+  externalReference: z.string().nullable(),
+  notes: z.string().nullable(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
+export type AssetTransaction = z.infer<typeof assetTransactionSchema>;
+
+export const createAssetTransactionInputSchema = z
+  .object({
+    accountId: z.string().uuid(),
+    assetType: assetTypeSchema,
+    assetId: z.string().uuid(),
+    transactionType: assetTransactionTypeSchema,
+    tradedAt: z.string(),
+    quantity: z.number().nonnegative().default(0),
+    unitPrice: z.number().nonnegative().default(0),
+    tradeCurrency: z.string().length(3).default('EUR'),
+    fxRateToEur: z.number().positive().nullable().optional(),
+    feesAmount: z.number().nonnegative().default(0),
+    feesCurrency: z.string().length(3).nullable().optional(),
+    dividendGross: z.number().nonnegative().nullable().optional(),
+    withholdingTax: z.number().nonnegative().nullable().optional(),
+    dividendNet: z.number().nonnegative().nullable().optional(),
+    externalReference: z.string().trim().min(1).nullable().optional(),
+    notes: z.string().trim().min(1).nullable().optional(),
+  })
+  .superRefine((value, ctx) => {
+    if (value.transactionType === 'buy' || value.transactionType === 'sell') {
+      if (value.quantity <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['quantity'],
+          message: 'Quantity must be greater than 0 for buy/sell.',
+        });
+      }
+      if (value.unitPrice <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['unitPrice'],
+          message: 'Unit price must be greater than 0 for buy/sell.',
+        });
+      }
+    }
+
+    if (value.transactionType === 'fee' && value.feesAmount <= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['feesAmount'],
+        message: 'Fees amount must be greater than 0 for fee transactions.',
+      });
+    }
+
+    if (value.transactionType === 'dividend') {
+      const gross = value.dividendGross ?? 0;
+      const withholding = value.withholdingTax ?? 0;
+      const net = value.dividendNet ?? 0;
+      if (gross <= 0 || net <= 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['dividendGross'],
+          message: 'Dividend gross and net must be greater than 0.',
+        });
+      }
+      if (withholding > gross) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['withholdingTax'],
+          message: 'Withholding tax cannot exceed dividend gross.',
+        });
+      }
+    }
+  });
+
+export type CreateAssetTransactionInput = z.infer<
+  typeof createAssetTransactionInputSchema
+>;
+
+export const financesSummarySchema = z.object({
+  totalBalance: z.number(),
+  accountCount: z.number().int(),
+  transactionCount: z.number().int(),
+  monthlyInflow: z.number(),
+  monthlyOutflow: z.number(),
+});
+
+export type FinancesSummary = z.infer<typeof financesSummarySchema>;
+
 export const priceSourceSchema = z.enum(['manual', 'market']);
 export type PriceSource = z.infer<typeof priceSourceSchema>;
 
@@ -92,6 +184,10 @@ export const assetSchema = z.object({
   assetType: assetTypeSchema,
   subtype: z.string().nullable(),
   symbol: z.string().nullable(),
+  ticker: z.string().min(1),
+  isin: z.string().length(12),
+  exchange: z.string().nullable(),
+  providerSymbol: z.string().nullable(),
   currency: z.string().length(3),
   isActive: z.boolean(),
   notes: z.string().nullable(),
@@ -137,18 +233,38 @@ export const assetValuationSchema = z.object({
 
 export type AssetValuation = z.infer<typeof assetValuationSchema>;
 
-export const createAssetInputSchema = z.object({
-  name: z.string().min(1),
-  assetType: assetTypeSchema,
-  subtype: z.string().trim().min(1).optional(),
-  symbol: z.string().trim().min(1).optional(),
-  currency: z.string().length(3).default('USD'),
-  notes: z.string().trim().min(1).optional(),
-  quantity: z.number().positive().default(1),
-  averageCost: z.number().nonnegative().optional(),
-  manualPrice: z.number().positive().optional(),
-  manualPriceAsOf: z.string().optional(),
-});
+export const createAssetInputSchema = z
+  .object({
+    name: z.string().min(1),
+    assetType: assetTypeSchema,
+    subtype: z.string().trim().min(1).optional(),
+    symbol: z.string().trim().min(1).optional(),
+    ticker: z.string().trim().min(1),
+    isin: z.string().trim().length(12).optional(),
+    exchange: z.string().trim().min(1).optional(),
+    providerSymbol: z.string().trim().min(1).optional(),
+    currency: z.string().length(3).default('USD'),
+    notes: z.string().trim().min(1).optional(),
+    quantity: z.number().positive().default(1),
+    averageCost: z.number().nonnegative().optional(),
+    manualPrice: z.number().positive().optional(),
+    manualPriceAsOf: z.string().optional(),
+  })
+  .superRefine((value, ctx) => {
+    const needsIsin = new Set([
+      'stock',
+      'etf',
+      'mutual_fund',
+      'retirement_fund',
+    ]);
+    if (needsIsin.has(value.assetType) && !value.isin) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['isin'],
+        message: 'ISIN is required for this asset type.',
+      });
+    }
+  });
 
 export type CreateAssetInput = z.infer<typeof createAssetInputSchema>;
 
@@ -158,6 +274,10 @@ export const updateAssetInputSchema = z
     assetType: assetTypeSchema,
     subtype: z.string().trim().min(1).nullable(),
     symbol: z.string().trim().min(1).nullable(),
+    ticker: z.string().trim().min(1),
+    isin: z.string().trim().length(12),
+    exchange: z.string().trim().min(1).nullable(),
+    providerSymbol: z.string().trim().min(1).nullable(),
     currency: z.string().length(3),
     notes: z.string().trim().min(1).nullable(),
     isActive: z.boolean(),
@@ -196,6 +316,59 @@ export const portfolioSummarySchema = z.object({
 });
 
 export type PortfolioSummary = z.infer<typeof portfolioSummarySchema>;
+
+export const overviewRangeSchema = z.enum([
+  '1D',
+  '1W',
+  '1M',
+  'YTD',
+  '1Y',
+  'MAX',
+]);
+export type OverviewRange = z.infer<typeof overviewRangeSchema>;
+
+export const overviewAccountSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1),
+});
+export type OverviewAccount = z.infer<typeof overviewAccountSchema>;
+
+export const overviewSeriesPointSchema = z.object({
+  tsIso: z.string(),
+  value: z.number(),
+});
+export type OverviewSeriesPoint = z.infer<typeof overviewSeriesPointSchema>;
+
+export const overviewPositionRowSchema = z.object({
+  assetId: z.string().uuid(),
+  symbol: z.string().min(1),
+  name: z.string().min(1),
+  quantity: z.number(),
+  avgBuyUnitEur: z.number().nullable(),
+  avgBuyTotalEur: z.number().nullable(),
+  currentUnitEur: z.number(),
+  currentTotalEur: z.number(),
+  periodPnlValueEur: z.number(),
+  periodPnlPct: z.number(),
+});
+export type OverviewPositionRow = z.infer<typeof overviewPositionRowSchema>;
+
+export const financesOverviewResponseSchema = z.object({
+  range: overviewRangeSchema,
+  rangeStartIso: z.string(),
+  accountId: z.union([z.literal('all'), z.string().uuid()]),
+  asOfIso: z.string(),
+  previousAsOfIso: z.string().nullable(),
+  totalValue: z.number(),
+  deltaValue: z.number(),
+  deltaPct: z.number(),
+  accounts: z.array(overviewAccountSchema),
+  series: z.array(overviewSeriesPointSchema),
+  positions: z.array(overviewPositionRowSchema),
+});
+export type FinancesOverviewResponse = z.infer<
+  typeof financesOverviewResponseSchema
+>;
 
 export const jobRunSchema = z.object({
   id: z.string().uuid(),

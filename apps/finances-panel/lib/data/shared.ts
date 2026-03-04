@@ -1,9 +1,7 @@
 import { apiRequest } from '../api';
 
-export type DataSource = 'api' | 'mock';
-
 export type SectionMeta = {
-  source: DataSource;
+  source: 'api';
   asOfIso: string;
 };
 

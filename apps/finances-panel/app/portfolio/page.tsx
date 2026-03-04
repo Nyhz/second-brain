@@ -8,7 +8,6 @@ export default async function PortfolioPage() {
       holdings={data.holdings}
       allocation={data.allocation}
       series={data.series}
-      source={data.source}
       asOfIso={data.asOfIso}
     />
   );

@@ -39,9 +39,9 @@ mock.module('@second-brain/db', () => {
   const and = (...conditions: unknown[]) => ({ type: 'and', conditions });
   const desc = (column: unknown) => ({ type: 'desc', column });
   const accounts = { __table: 'accounts' };
-  const transactions = { __table: 'transactions' };
   const assets = { __table: 'assets' };
   const assetPositions = { __table: 'assetPositions' };
+  const assetTransactions = { __table: 'assetTransactions' };
   const priceHistory = { __table: 'priceHistory' };
 
   return {
@@ -51,9 +51,9 @@ mock.module('@second-brain/db', () => {
     and,
     desc,
     accounts,
-    transactions,
     assets,
     assetPositions,
+    assetTransactions,
     priceHistory,
   };
 });
@@ -120,5 +120,59 @@ describe('ops routes', () => {
     expect(
       body.results.find((result) => result.service === 'worker')?.status,
     ).toBe('degraded');
+  });
+
+  test('uses latest populated hour as rightmost timeline slot', async () => {
+    const nowHour = new Date();
+    nowHour.setUTCMinutes(0, 0, 0);
+    const previousHour = new Date(nowHour);
+    previousHour.setUTCHours(previousHour.getUTCHours() - 1);
+
+    checks.length = 0;
+    checks.push(
+      {
+        serviceName: 'api',
+        checkedAt: previousHour,
+        status: 'operational',
+        httpStatus: 200,
+        latencyMs: 25,
+      },
+      {
+        serviceName: 'worker',
+        checkedAt: previousHour,
+        status: 'operational',
+        httpStatus: 200,
+        latencyMs: 30,
+      },
+      {
+        serviceName: 'caddy',
+        checkedAt: previousHour,
+        status: 'operational',
+        httpStatus: 200,
+        latencyMs: 20,
+      },
+    );
+
+    const app = new Elysia();
+    registerOpsRoutes(app, 'postgres://ignored');
+
+    const response = await app.handle(
+      createRequest('/ops/status/history?hours=24'),
+    );
+    expect(response.status).toBe(200);
+
+    const body = await parseResponse<{
+      services: Array<{
+        service: string;
+        points: Array<{ hourIso: string; status: string }>;
+      }>;
+    }>(response);
+
+    const apiPoints = body.services.find((service) => service.service === 'api')
+      ?.points;
+    expect(apiPoints).toBeDefined();
+    const last = apiPoints?.at(-1);
+    expect(last?.hourIso).toBe(previousHour.toISOString());
+    expect(last?.status).toBe('operational');
   });
 });

@@ -1,8 +1,15 @@
 'use client';
 
-import { AppShell, type NavItem, SideNav, TopNav } from '@second-brain/ui';
+import {
+  AppShell,
+  ThemeSelector,
+  type NavItem,
+  SideNav,
+  TopNav,
+} from './ui';
 import { usePathname } from 'next/navigation';
 import type { ReactNode } from 'react';
+import { useThemeMode } from './theme-provider';
 
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? '';
 const withBasePath = (path: string) => {
@@ -25,6 +32,7 @@ const navItems: NavItem[] = [
 
 export function LayoutShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const { mode, setMode } = useThemeMode();
   const activeItems = navItems.map((item) => ({
     ...item,
     active:
@@ -37,14 +45,9 @@ export function LayoutShell({ children }: { children: ReactNode }) {
     <AppShell
       topNav={
         <TopNav
-          title="Second Brain Markets"
+          title="Second Brain Finances"
           right={
-            <div className="top-nav-actions">
-              <button type="button">1D</button>
-              <button type="button">1W</button>
-              <button type="button">1M</button>
-              <button type="button">1Y</button>
-            </div>
+            <ThemeSelector value={mode} onChange={setMode} compact />
           }
         />
       }

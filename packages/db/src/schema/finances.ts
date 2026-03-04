@@ -16,6 +16,15 @@ export const accounts = financesSchema.table('accounts', {
   id: uuid('id').defaultRandom().primaryKey(),
   name: varchar('name', { length: 255 }).notNull(),
   currency: varchar('currency', { length: 3 }).notNull(),
+  baseCurrency: varchar('base_currency', { length: 3 })
+    .notNull()
+    .default('EUR'),
+  openingBalanceEur: numeric('opening_balance_eur', {
+    precision: 18,
+    scale: 2,
+  })
+    .notNull()
+    .default('0'),
   accountType: varchar('account_type', { length: 32 }).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true })
     .notNull()
@@ -24,32 +33,6 @@ export const accounts = financesSchema.table('accounts', {
     .notNull()
     .defaultNow(),
 });
-
-export const transactions = financesSchema.table(
-  'transactions',
-  {
-    id: uuid('id').defaultRandom().primaryKey(),
-    accountId: uuid('account_id')
-      .notNull()
-      .references(() => accounts.id, { onDelete: 'cascade' }),
-    postedAt: timestamp('posted_at', { withTimezone: true }).notNull(),
-    amount: numeric('amount', { precision: 18, scale: 2 }).notNull(),
-    description: text('description').notNull(),
-    category: varchar('category', { length: 128 }).notNull(),
-    createdAt: timestamp('created_at', { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-    updatedAt: timestamp('updated_at', { withTimezone: true })
-      .notNull()
-      .defaultNow(),
-  },
-  (table) => ({
-    accountPostedIdx: index('transactions_account_posted_idx').on(
-      table.accountId,
-      table.postedAt,
-    ),
-  }),
-);
 
 export const dailyBalances = financesSchema.table(
   'daily_balances',
@@ -100,6 +83,10 @@ export const assets = financesSchema.table(
     assetType: varchar('asset_type', { length: 32 }).notNull(),
     subtype: varchar('subtype', { length: 64 }),
     symbol: varchar('symbol', { length: 32 }),
+    ticker: varchar('ticker', { length: 32 }).notNull(),
+    isin: varchar('isin', { length: 12 }).notNull(),
+    exchange: varchar('exchange', { length: 64 }),
+    providerSymbol: varchar('provider_symbol', { length: 64 }),
     currency: varchar('currency', { length: 3 }).notNull().default('USD'),
     isActive: boolean('is_active').notNull().default(true),
     notes: text('notes'),
@@ -116,6 +103,62 @@ export const assets = financesSchema.table(
       table.isActive,
     ),
     symbolIdx: index('assets_symbol_idx').on(table.symbol),
+    tickerIdx: index('assets_ticker_idx').on(table.ticker),
+    isinIdx: uniqueIndex('assets_isin_uidx').on(table.isin),
+  }),
+);
+
+export const assetTransactions = financesSchema.table(
+  'asset_transactions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    assetId: uuid('asset_id')
+      .notNull()
+      .references(() => assets.id, { onDelete: 'cascade' }),
+    transactionType: varchar('transaction_type', { length: 16 }).notNull(),
+    tradedAt: timestamp('traded_at', { withTimezone: true }).notNull(),
+    quantity: numeric('quantity', { precision: 24, scale: 8 }).notNull(),
+    unitPrice: numeric('unit_price', { precision: 18, scale: 6 }).notNull(),
+    tradeCurrency: varchar('trade_currency', { length: 3 }).notNull(),
+    fxRateToEur: numeric('fx_rate_to_eur', { precision: 18, scale: 8 }),
+    cashImpactEur: numeric('cash_impact_eur', { precision: 18, scale: 2 })
+      .notNull()
+      .default('0'),
+    feesAmount: numeric('fees_amount', { precision: 18, scale: 6 })
+      .notNull()
+      .default('0'),
+    feesCurrency: varchar('fees_currency', { length: 3 }),
+    dividendGross: numeric('dividend_gross', { precision: 18, scale: 6 }),
+    withholdingTax: numeric('withholding_tax', { precision: 18, scale: 6 }),
+    dividendNet: numeric('dividend_net', { precision: 18, scale: 6 }),
+    externalReference: text('external_reference'),
+    notes: text('notes'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    accountTradedIdx: index('asset_transactions_account_traded_idx').on(
+      table.accountId,
+      table.tradedAt,
+    ),
+    assetTradedIdx: index('asset_transactions_asset_traded_idx').on(
+      table.assetId,
+      table.tradedAt,
+    ),
+    accountAssetTradedIdx: index(
+      'asset_transactions_account_asset_traded_idx',
+    ).on(table.accountId, table.assetId, table.tradedAt),
+    typeTradedIdx: index('asset_transactions_type_traded_idx').on(
+      table.transactionType,
+      table.tradedAt,
+    ),
   }),
 );
 

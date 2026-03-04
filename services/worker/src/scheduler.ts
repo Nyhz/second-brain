@@ -1,34 +1,12 @@
 import { loadWorkerEnv } from '@second-brain/config';
 import { checkServiceHealth } from './jobs/check-service-health';
 import { computeDailyBalances } from './jobs/compute-balances';
-import { seedSyntheticPrices } from './jobs/seed-prices';
 import { snapshotAssetValuations } from './jobs/snapshot-asset-valuations';
 import { runWithAdvisoryLock } from './lib/jobs';
 import { log } from './lib/logger';
 
 export const startScheduler = () => {
   const env = loadWorkerEnv();
-  const symbols = env.SYNTHETIC_PRICE_SYMBOLS.split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-
-  const runPriceJob = async () => {
-    try {
-      await runWithAdvisoryLock(
-        env.DATABASE_URL,
-        'finances_seed_synthetic_prices',
-        new Date(),
-        () =>
-          seedSyntheticPrices(
-            env.DATABASE_URL,
-            symbols,
-            env.SYNTHETIC_PRICE_SEED,
-          ),
-      );
-    } catch (error) {
-      log('error', 'price_job_failed', { error: String(error) });
-    }
-  };
 
   const runBalanceJob = async () => {
     try {
@@ -78,14 +56,9 @@ export const startScheduler = () => {
     }
   };
 
-  void runPriceJob();
   void runBalanceJob();
   void runAssetSnapshotJob();
   void runServiceHealthJob();
-
-  const priceTimer = setInterval(() => {
-    void runPriceJob();
-  }, env.PRICE_JOB_INTERVAL_SECONDS * 1000);
 
   const balanceTimer = setInterval(() => {
     void runBalanceJob();
@@ -100,7 +73,6 @@ export const startScheduler = () => {
   }, env.SERVICE_HEALTH_INTERVAL_SECONDS * 1000);
 
   return () => {
-    clearInterval(priceTimer);
     clearInterval(balanceTimer);
     clearInterval(assetSnapshotTimer);
     clearInterval(serviceHealthTimer);

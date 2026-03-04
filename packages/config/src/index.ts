@@ -17,7 +17,6 @@ const apiSchema = baseSchema.extend({
 
 const workerSchema = baseSchema.extend({
   WORKER_PORT: z.coerce.number().int().positive().default(3002),
-  PRICE_JOB_INTERVAL_SECONDS: z.coerce.number().int().positive().default(60),
   BALANCE_JOB_INTERVAL_SECONDS: z.coerce.number().int().positive().default(120),
   ASSET_SNAPSHOT_INTERVAL_SECONDS: z.coerce
     .number()
@@ -36,8 +35,6 @@ const workerSchema = baseSchema.extend({
     .string()
     .url()
     .default('http://caddy:8080/__caddy/healthz'),
-  SYNTHETIC_PRICE_SEED: z.coerce.number().int().default(42),
-  SYNTHETIC_PRICE_SYMBOLS: z.string().default('SPY,QQQ,BTC'),
 });
 
 const appSchema = z.object({

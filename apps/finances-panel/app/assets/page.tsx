@@ -3,18 +3,21 @@
 import type { AssetType, AssetWithPosition } from '@second-brain/types';
 import {
   AllocationDonutChart,
+  Button,
   Card,
   DataTable,
+  EmptyState,
+  Modal,
   PageTabs,
   PriceLineChart,
-} from '@second-brain/ui';
+} from '../../components/ui';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { apiRequest } from '../../lib/api';
 import { loadAssetsData } from '../../lib/data/assets-data';
+import type { HoldingRow, TimePoint } from '../../lib/dashboard-types';
 import { getApiErrorMessage } from '../../lib/errors';
 import { formatMoney } from '../../lib/format';
-import type { HoldingRow, TimePoint } from '../../lib/mock/types';
 
 const assetTypes: AssetType[] = [
   'stock',
@@ -32,6 +35,10 @@ type CreateAssetForm = {
   name: string;
   assetType: AssetType;
   symbol: string;
+  ticker: string;
+  isin: string;
+  exchange: string;
+  providerSymbol: string;
   currency: string;
   quantity: string;
   averageCost: string;
@@ -50,6 +57,10 @@ type MetadataForm = {
   name: string;
   assetType: AssetType;
   symbol: string;
+  ticker: string;
+  isin: string;
+  exchange: string;
+  providerSymbol: string;
   currency: string;
   notes: string;
   isActive: boolean;
@@ -59,6 +70,10 @@ const initialCreateForm: CreateAssetForm = {
   name: '',
   assetType: 'stock',
   symbol: '',
+  ticker: '',
+  isin: '',
+  exchange: '',
+  providerSymbol: '',
   currency: 'USD',
   quantity: '1',
   averageCost: '',
@@ -77,6 +92,10 @@ const initialMetadataForm: MetadataForm = {
   name: '',
   assetType: 'stock',
   symbol: '',
+  ticker: '',
+  isin: '',
+  exchange: '',
+  providerSymbol: '',
   currency: 'USD',
   notes: '',
   isActive: true,
@@ -102,7 +121,6 @@ export default function AssetsPage() {
   );
   const [activeTab, setActiveTab] = useState('graph');
 
-  const [source, setSource] = useState<'api' | 'mock'>('mock');
   const [rows, setRows] = useState<AssetWithPosition[]>([]);
   const [holdings, setHoldings] = useState<HoldingRow[]>([]);
   const [allocation, setAllocation] = useState<
@@ -121,6 +139,7 @@ export default function AssetsPage() {
 
   const [isLoading, setIsLoading] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isUpdatingPosition, setIsUpdatingPosition] = useState(false);
   const [isUpdatingMetadata, setIsUpdatingMetadata] = useState(false);
   const [deactivatingId, setDeactivatingId] = useState<string | null>(null);
@@ -140,7 +159,6 @@ export default function AssetsPage() {
     setIsLoading(true);
     try {
       const data = await loadAssetsData();
-      setSource(data.source);
       setRows(data.rows);
       setHoldings(data.holdings);
       setAllocation(data.allocation);
@@ -181,6 +199,19 @@ export default function AssetsPage() {
       setErrorMessage('Currency must be a 3-letter code (for example, USD).');
       return;
     }
+    if (!createForm.ticker.trim()) {
+      setErrorMessage('Ticker is required.');
+      return;
+    }
+    if (
+      ['stock', 'etf', 'mutual_fund', 'retirement_fund'].includes(
+        createForm.assetType,
+      ) &&
+      !createForm.isin.trim()
+    ) {
+      setErrorMessage('ISIN is required for this asset type.');
+      return;
+    }
 
     const quantity = Number(createForm.quantity);
     if (!Number.isFinite(quantity) || quantity <= 0) {
@@ -192,6 +223,10 @@ export default function AssetsPage() {
       name: createForm.name.trim(),
       assetType: createForm.assetType,
       symbol: createForm.symbol.trim() || undefined,
+      ticker: createForm.ticker.trim().toUpperCase(),
+      isin: createForm.isin.trim().toUpperCase() || undefined,
+      exchange: createForm.exchange.trim() || undefined,
+      providerSymbol: createForm.providerSymbol.trim() || undefined,
       currency: createForm.currency.trim().toUpperCase(),
       quantity,
       averageCost: toNullableNumber(createForm.averageCost),
@@ -206,6 +241,7 @@ export default function AssetsPage() {
         body: JSON.stringify(payload),
       });
       setCreateForm(initialCreateForm);
+      setIsCreateModalOpen(false);
       await load();
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
@@ -275,6 +311,10 @@ export default function AssetsPage() {
       name: asset.name,
       assetType: asset.assetType,
       symbol: asset.symbol ?? '',
+      ticker: asset.ticker ?? '',
+      isin: asset.isin ?? '',
+      exchange: asset.exchange ?? '',
+      providerSymbol: asset.providerSymbol ?? '',
       currency: asset.currency,
       notes: asset.notes ?? '',
       isActive: asset.isActive,
@@ -291,6 +331,12 @@ export default function AssetsPage() {
     const normalizedName = metadataForm.name.trim();
     const normalizedCurrency = metadataForm.currency.trim().toUpperCase();
     const normalizedSymbol = metadataForm.symbol.trim().toUpperCase();
+    const normalizedTicker = metadataForm.ticker.trim().toUpperCase();
+    const normalizedIsin = metadataForm.isin.trim().toUpperCase();
+    const normalizedExchange = metadataForm.exchange.trim().toUpperCase();
+    const normalizedProviderSymbol = metadataForm.providerSymbol
+      .trim()
+      .toUpperCase();
     const normalizedNotes = metadataForm.notes.trim();
 
     if (!normalizedName) {
@@ -299,6 +345,10 @@ export default function AssetsPage() {
     }
     if (!/^[A-Z]{3}$/.test(normalizedCurrency)) {
       setErrorMessage('Currency must be a 3-letter code (for example, USD).');
+      return;
+    }
+    if (!normalizedTicker) {
+      setErrorMessage('Ticker is required.');
       return;
     }
 
@@ -310,6 +360,12 @@ export default function AssetsPage() {
           name: normalizedName,
           assetType: metadataForm.assetType,
           symbol: normalizedSymbol ? normalizedSymbol : null,
+          ticker: normalizedTicker,
+          isin: normalizedIsin ? normalizedIsin : null,
+          exchange: normalizedExchange ? normalizedExchange : null,
+          providerSymbol: normalizedProviderSymbol
+            ? normalizedProviderSymbol
+            : null,
           currency: normalizedCurrency,
           notes: normalizedNotes ? normalizedNotes : null,
           isActive: metadataForm.isActive,
@@ -338,14 +394,18 @@ export default function AssetsPage() {
   };
 
   return (
-    <div className="grid" style={{ gap: '1rem' }}>
-      <header>
-        <h1>Assets Universe</h1>
-        <p className="small">
-          Stocks, ETFs, funds, retirement holdings, real-estate proxies, and
-          crypto.
-        </p>
-        <p className="small">Source: {source.toUpperCase()}</p>
+    <div className="page-stack">
+      <header className="page-header">
+        <div>
+          <h1>Assets Universe</h1>
+          <p className="small">
+            Stocks, ETFs, funds, retirement holdings, real-estate proxies, and
+            crypto.
+          </p>
+        </div>
+        <Button variant="primary" onClick={() => setIsCreateModalOpen(true)}>
+          Create Asset
+        </Button>
       </header>
 
       {errorMessage ? (
@@ -359,10 +419,18 @@ export default function AssetsPage() {
       {activeTab === 'graph' ? (
         <div className="grid two-col" style={{ gap: '1rem' }}>
           <Card title="Portfolio Graph">
-            <PriceLineChart data={series} />
+            {series.length === 0 ? (
+              <EmptyState message="No portfolio history available yet." />
+            ) : (
+              <PriceLineChart data={series} />
+            )}
           </Card>
           <Card title="Asset Type Composition">
-            <AllocationDonutChart data={allocation} />
+            {allocation.length === 0 ? (
+              <EmptyState message="No allocation yet." />
+            ) : (
+              <AllocationDonutChart data={allocation} />
+            )}
           </Card>
         </div>
       ) : null}
@@ -370,103 +438,6 @@ export default function AssetsPage() {
       {activeTab === 'table' ? (
         <div className="grid" style={{ gap: '1rem' }}>
           <div className="grid two-col" style={{ gap: '1rem' }}>
-            <Card title="Add Asset">
-              <form className="form-grid" onSubmit={createAsset}>
-                <input
-                  value={createForm.name}
-                  onChange={(event) =>
-                    setCreateForm((current) => ({
-                      ...current,
-                      name: event.target.value,
-                    }))
-                  }
-                  placeholder="Asset name"
-                  required
-                />
-                <select
-                  value={createForm.assetType}
-                  onChange={(event) =>
-                    setCreateForm((current) => ({
-                      ...current,
-                      assetType: event.target.value as AssetType,
-                    }))
-                  }
-                >
-                  {assetTypes.map((type) => (
-                    <option key={type} value={type}>
-                      {type}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  value={createForm.symbol}
-                  onChange={(event) =>
-                    setCreateForm((current) => ({
-                      ...current,
-                      symbol: event.target.value.toUpperCase(),
-                    }))
-                  }
-                  placeholder="Symbol (optional)"
-                />
-                <input
-                  value={createForm.currency}
-                  maxLength={3}
-                  onChange={(event) =>
-                    setCreateForm((current) => ({
-                      ...current,
-                      currency: event.target.value.toUpperCase(),
-                    }))
-                  }
-                  placeholder="Currency"
-                  required
-                />
-                <input
-                  value={createForm.quantity}
-                  onChange={(event) =>
-                    setCreateForm((current) => ({
-                      ...current,
-                      quantity: event.target.value,
-                    }))
-                  }
-                  placeholder="Quantity"
-                  required
-                />
-                <input
-                  value={createForm.averageCost}
-                  onChange={(event) =>
-                    setCreateForm((current) => ({
-                      ...current,
-                      averageCost: event.target.value,
-                    }))
-                  }
-                  placeholder="Average cost (optional)"
-                />
-                <input
-                  value={createForm.manualPrice}
-                  onChange={(event) =>
-                    setCreateForm((current) => ({
-                      ...current,
-                      manualPrice: event.target.value,
-                    }))
-                  }
-                  placeholder="Manual price (optional)"
-                />
-                <input
-                  value={createForm.notes}
-                  onChange={(event) =>
-                    setCreateForm((current) => ({
-                      ...current,
-                      notes: event.target.value,
-                    }))
-                  }
-                  placeholder="Notes (optional)"
-                />
-                <button type="submit" disabled={isCreating}>
-                  {isCreating ? 'Creating...' : 'Create Asset'}
-                </button>
-              </form>
-            </Card>
-
             <Card title="Update Position">
               <form className="form-grid" onSubmit={updatePosition}>
                 <select
@@ -564,6 +535,47 @@ export default function AssetsPage() {
                   placeholder="Symbol (optional)"
                 />
                 <input
+                  value={metadataForm.ticker}
+                  onChange={(event) =>
+                    setMetadataForm((current) => ({
+                      ...current,
+                      ticker: event.target.value.toUpperCase(),
+                    }))
+                  }
+                  placeholder="Ticker"
+                  required
+                />
+                <input
+                  value={metadataForm.isin}
+                  onChange={(event) =>
+                    setMetadataForm((current) => ({
+                      ...current,
+                      isin: event.target.value.toUpperCase(),
+                    }))
+                  }
+                  placeholder="ISIN"
+                />
+                <input
+                  value={metadataForm.exchange}
+                  onChange={(event) =>
+                    setMetadataForm((current) => ({
+                      ...current,
+                      exchange: event.target.value.toUpperCase(),
+                    }))
+                  }
+                  placeholder="Exchange (optional)"
+                />
+                <input
+                  value={metadataForm.providerSymbol}
+                  onChange={(event) =>
+                    setMetadataForm((current) => ({
+                      ...current,
+                      providerSymbol: event.target.value.toUpperCase(),
+                    }))
+                  }
+                  placeholder="Provider symbol (optional)"
+                />
+                <input
                   value={metadataForm.currency}
                   maxLength={3}
                   onChange={(event) =>
@@ -614,48 +626,54 @@ export default function AssetsPage() {
           ) : null}
 
           <Card title="Composition Table">
-            <DataTable
-              columns={[
-                {
-                  key: 'asset',
-                  header: 'Asset',
-                  render: (row: HoldingRow) => `${row.symbol} · ${row.name}`,
-                },
-                {
-                  key: 'type',
-                  header: 'Type',
-                  render: (row: HoldingRow) => row.type,
-                },
-                {
-                  key: 'qty',
-                  header: 'Quantity',
-                  render: (row: HoldingRow) => row.quantity.toString(),
-                },
-                {
-                  key: 'price',
-                  header: 'Price',
-                  render: (row: HoldingRow) => formatMoney(row.price),
-                },
-                {
-                  key: 'value',
-                  header: 'Value',
-                  render: (row: HoldingRow) => formatMoney(row.value),
-                },
-                {
-                  key: 'change',
-                  header: '24h %',
-                  render: (row: HoldingRow) =>
-                    `${row.dayChangePct > 0 ? '+' : ''}${row.dayChangePct}%`,
-                },
-              ]}
-              rows={holdings}
-              rowKey={(row) => row.symbol}
-            />
+            {holdings.length === 0 ? (
+              <EmptyState message="No holdings yet." />
+            ) : (
+              <DataTable
+                columns={[
+                  {
+                    key: 'asset',
+                    header: 'Asset',
+                    render: (row: HoldingRow) => `${row.symbol} · ${row.name}`,
+                  },
+                  {
+                    key: 'type',
+                    header: 'Type',
+                    render: (row: HoldingRow) => row.type,
+                  },
+                  {
+                    key: 'qty',
+                    header: 'Quantity',
+                    render: (row: HoldingRow) => row.quantity.toString(),
+                  },
+                  {
+                    key: 'price',
+                    header: 'Price',
+                    render: (row: HoldingRow) => formatMoney(row.price),
+                  },
+                  {
+                    key: 'value',
+                    header: 'Value',
+                    render: (row: HoldingRow) => formatMoney(row.value),
+                  },
+                  {
+                    key: 'change',
+                    header: '24h %',
+                    render: (row: HoldingRow) =>
+                      `${row.dayChangePct > 0 ? '+' : ''}${row.dayChangePct}%`,
+                  },
+                ]}
+                rows={holdings}
+                rowKey={(row) => row.symbol}
+              />
+            )}
           </Card>
 
           <Card title="Manage Assets">
             {isLoading ? (
               <p className="small">Loading assets...</p>
+            ) : rows.length === 0 ? (
+              <EmptyState message="No assets created yet." />
             ) : (
               <DataTable
                 columns={[
@@ -672,7 +690,13 @@ export default function AssetsPage() {
                   {
                     key: 'symbol',
                     header: 'Symbol',
-                    render: (row: AssetWithPosition) => row.symbol ?? '-',
+                    render: (row: AssetWithPosition) =>
+                      row.symbol ?? row.ticker ?? '-',
+                  },
+                  {
+                    key: 'isin',
+                    header: 'ISIN',
+                    render: (row: AssetWithPosition) => row.isin ?? '-',
                   },
                   {
                     key: 'qty',
@@ -742,32 +766,186 @@ export default function AssetsPage() {
 
       {activeTab === 'prices' ? (
         <Card title="Daily Updated Prices">
-          <DataTable
-            columns={[
-              { key: 'symbol', header: 'Symbol', render: (row) => row.symbol },
-              { key: 'name', header: 'Name', render: (row) => row.name },
-              {
-                key: 'category',
-                header: 'Category',
-                render: (row) => row.category,
-              },
-              {
-                key: 'price',
-                header: 'Price',
-                render: (row) => formatMoney(row.price),
-              },
-              {
-                key: 'day',
-                header: '24h %',
-                render: (row) =>
-                  `${row.dayChangePct > 0 ? '+' : ''}${row.dayChangePct}%`,
-              },
-            ]}
-            rows={markets}
-            rowKey={(row) => row.symbol}
-          />
+          {markets.length === 0 ? (
+            <EmptyState message="No market prices available yet." />
+          ) : (
+            <DataTable
+              columns={[
+                {
+                  key: 'symbol',
+                  header: 'Symbol',
+                  render: (row) => row.symbol,
+                },
+                { key: 'name', header: 'Name', render: (row) => row.name },
+                {
+                  key: 'category',
+                  header: 'Category',
+                  render: (row) => row.category,
+                },
+                {
+                  key: 'price',
+                  header: 'Price',
+                  render: (row) => formatMoney(row.price),
+                },
+                {
+                  key: 'day',
+                  header: '24h %',
+                  render: (row) =>
+                    `${row.dayChangePct > 0 ? '+' : ''}${row.dayChangePct}%`,
+                },
+              ]}
+              rows={markets}
+              rowKey={(row) => row.symbol}
+            />
+          )}
         </Card>
       ) : null}
+
+      <Modal
+        open={isCreateModalOpen}
+        title="Create Asset"
+        onClose={() => {
+          if (!isCreating) {
+            setIsCreateModalOpen(false);
+          }
+        }}
+      >
+        <form className="form-grid" onSubmit={createAsset}>
+          <input
+            value={createForm.name}
+            onChange={(event) =>
+              setCreateForm((current) => ({
+                ...current,
+                name: event.target.value,
+              }))
+            }
+            placeholder="Asset name"
+            required
+          />
+          <select
+            value={createForm.assetType}
+            onChange={(event) =>
+              setCreateForm((current) => ({
+                ...current,
+                assetType: event.target.value as AssetType,
+              }))
+            }
+          >
+            {assetTypes.map((type) => (
+              <option key={type} value={type}>
+                {type}
+              </option>
+            ))}
+          </select>
+          <input
+            value={createForm.symbol}
+            onChange={(event) =>
+              setCreateForm((current) => ({
+                ...current,
+                symbol: event.target.value.toUpperCase(),
+              }))
+            }
+            placeholder="Symbol (optional)"
+          />
+          <input
+            value={createForm.ticker}
+            onChange={(event) =>
+              setCreateForm((current) => ({
+                ...current,
+                ticker: event.target.value.toUpperCase(),
+              }))
+            }
+            placeholder="Ticker"
+            required
+          />
+          <input
+            value={createForm.isin}
+            onChange={(event) =>
+              setCreateForm((current) => ({
+                ...current,
+                isin: event.target.value.toUpperCase(),
+              }))
+            }
+            placeholder="ISIN (required for stock/etf/funds)"
+          />
+          <input
+            value={createForm.exchange}
+            onChange={(event) =>
+              setCreateForm((current) => ({
+                ...current,
+                exchange: event.target.value.toUpperCase(),
+              }))
+            }
+            placeholder="Exchange (optional)"
+          />
+          <input
+            value={createForm.providerSymbol}
+            onChange={(event) =>
+              setCreateForm((current) => ({
+                ...current,
+                providerSymbol: event.target.value.toUpperCase(),
+              }))
+            }
+            placeholder="Provider symbol (optional)"
+          />
+          <input
+            value={createForm.currency}
+            maxLength={3}
+            onChange={(event) =>
+              setCreateForm((current) => ({
+                ...current,
+                currency: event.target.value.toUpperCase(),
+              }))
+            }
+            placeholder="Currency"
+            required
+          />
+          <input
+            value={createForm.quantity}
+            onChange={(event) =>
+              setCreateForm((current) => ({
+                ...current,
+                quantity: event.target.value,
+              }))
+            }
+            placeholder="Quantity"
+            required
+          />
+          <input
+            value={createForm.averageCost}
+            onChange={(event) =>
+              setCreateForm((current) => ({
+                ...current,
+                averageCost: event.target.value,
+              }))
+            }
+            placeholder="Average cost (optional)"
+          />
+          <input
+            value={createForm.manualPrice}
+            onChange={(event) =>
+              setCreateForm((current) => ({
+                ...current,
+                manualPrice: event.target.value,
+              }))
+            }
+            placeholder="Manual price (optional)"
+          />
+          <input
+            value={createForm.notes}
+            onChange={(event) =>
+              setCreateForm((current) => ({
+                ...current,
+                notes: event.target.value,
+              }))
+            }
+            placeholder="Notes (optional)"
+          />
+          <Button type="submit" variant="primary" disabled={isCreating} fullWidth>
+            {isCreating ? 'Creating...' : 'Create Asset'}
+          </Button>
+        </form>
+      </Modal>
     </div>
   );
 }

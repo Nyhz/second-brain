@@ -6,18 +6,9 @@ type AccountRow = {
   id: string;
   name: string;
   currency: string;
+  baseCurrency: string;
+  openingBalanceEur: string;
   accountType: string;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
-type TransactionRow = {
-  id: string;
-  accountId: string;
-  postedAt: Date;
-  amount: string;
-  description: string;
-  category: string;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -28,6 +19,10 @@ type AssetRow = {
   assetType: string;
   subtype: string | null;
   symbol: string | null;
+  ticker: string;
+  isin: string;
+  exchange: string | null;
+  providerSymbol: string | null;
   currency: string;
   isActive: boolean;
   notes: string | null;
@@ -54,28 +49,50 @@ type PriceHistoryRow = {
   source: string;
 };
 
+type AssetTransactionRow = {
+  id: string;
+  accountId: string;
+  assetId: string;
+  transactionType: string;
+  tradedAt: Date;
+  quantity: string;
+  unitPrice: string;
+  tradeCurrency: string;
+  fxRateToEur: string | null;
+  cashImpactEur: string;
+  feesAmount: string;
+  feesCurrency: string | null;
+  dividendGross: string | null;
+  withholdingTax: string | null;
+  dividendNet: string | null;
+  externalReference: string | null;
+  notes: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 const state: {
   accounts: AccountRow[];
-  transactions: TransactionRow[];
   assets: AssetRow[];
   assetPositions: AssetPositionRow[];
   priceHistory: PriceHistoryRow[];
+  assetTransactions: AssetTransactionRow[];
   accountSeq: number;
-  txSeq: number;
   assetSeq: number;
   assetPositionSeq: number;
   priceSeq: number;
+  assetTxSeq: number;
 } = {
   accounts: [],
-  transactions: [],
   assets: [],
   assetPositions: [],
   priceHistory: [],
+  assetTransactions: [],
   accountSeq: 0,
-  txSeq: 0,
   assetSeq: 0,
   assetPositionSeq: 0,
   priceSeq: 0,
+  assetTxSeq: 0,
 };
 
 const now = () => new Date();
@@ -86,18 +103,12 @@ const accountsTable = {
   createdAt: { table: 'accounts', name: 'createdAt' },
 };
 
-const transactionsTable = {
-  __table: 'transactions',
-  id: { table: 'transactions', name: 'id' },
-  accountId: { table: 'transactions', name: 'accountId' },
-  postedAt: { table: 'transactions', name: 'postedAt' },
-};
-
 const assetsTable = {
   __table: 'assets',
   id: { table: 'assets', name: 'id' },
   assetType: { table: 'assets', name: 'assetType' },
   symbol: { table: 'assets', name: 'symbol' },
+  ticker: { table: 'assets', name: 'ticker' },
   isActive: { table: 'assets', name: 'isActive' },
   updatedAt: { table: 'assets', name: 'updatedAt' },
 };
@@ -115,20 +126,27 @@ const priceHistoryTable = {
   price: { table: 'priceHistory', name: 'price' },
 };
 
+const assetTransactionsTable = {
+  __table: 'assetTransactions',
+  id: { table: 'assetTransactions', name: 'id' },
+  accountId: { table: 'assetTransactions', name: 'accountId' },
+  assetId: { table: 'assetTransactions', name: 'assetId' },
+  tradedAt: { table: 'assetTransactions', name: 'tradedAt' },
+  transactionType: { table: 'assetTransactions', name: 'transactionType' },
+};
+
 type Condition = {
-  column:
-    | { name: keyof TransactionRow | keyof AccountRow | keyof AssetRow }
-    | { name: keyof AssetPositionRow | keyof PriceHistoryRow };
+  column: { name: string };
   value: string | boolean;
 };
 
 const filterRows = <
   T extends
     | AccountRow
-    | TransactionRow
     | AssetRow
     | AssetPositionRow
-    | PriceHistoryRow,
+    | PriceHistoryRow
+    | AssetTransactionRow,
 >(
   rows: T[],
   condition: Condition,
@@ -143,34 +161,39 @@ const makeSummary = () => {
   monthStart.setDate(1);
   monthStart.setHours(0, 0, 0, 0);
 
-  const amounts = state.transactions.map((tx) => Number(tx.amount));
-  const totalBalance = amounts.reduce((sum, amount) => sum + amount, 0);
-  const monthlyInflow = state.transactions
-    .filter((tx) => tx.postedAt >= monthStart && Number(tx.amount) > 0)
-    .reduce((sum, tx) => sum + Number(tx.amount), 0);
-  const monthlyOutflow = state.transactions
-    .filter((tx) => tx.postedAt >= monthStart && Number(tx.amount) < 0)
-    .reduce((sum, tx) => sum + Number(tx.amount), 0);
+  const opening = state.accounts.reduce(
+    (sum, account) => sum + Number(account.openingBalanceEur),
+    0,
+  );
+  const impacts = state.assetTransactions.map((tx) => Number(tx.cashImpactEur));
+  const totalBalance =
+    opening + impacts.reduce((sum, amount) => sum + amount, 0);
+  const monthlyInflow = state.assetTransactions
+    .filter((tx) => tx.tradedAt >= monthStart && Number(tx.cashImpactEur) > 0)
+    .reduce((sum, tx) => sum + Number(tx.cashImpactEur), 0);
+  const monthlyOutflow = state.assetTransactions
+    .filter((tx) => tx.tradedAt >= monthStart && Number(tx.cashImpactEur) < 0)
+    .reduce((sum, tx) => sum + Number(tx.cashImpactEur), 0);
 
   return {
     total_balance: totalBalance,
     monthly_inflow: monthlyInflow,
     monthly_outflow: monthlyOutflow,
-    transaction_count: state.transactions.length,
+    transaction_count: state.assetTransactions.length,
     account_count: state.accounts.length,
   };
 };
 
 const mkAccountId = () =>
   `00000000-0000-4000-8000-${String(++state.accountSeq).padStart(12, '0')}`;
-const mkTxId = () =>
-  `10000000-0000-4000-8000-${String(++state.txSeq).padStart(12, '0')}`;
 const mkAssetId = () =>
   `30000000-0000-4000-8000-${String(++state.assetSeq).padStart(12, '0')}`;
 const mkAssetPositionId = () =>
   `40000000-0000-4000-8000-${String(++state.assetPositionSeq).padStart(12, '0')}`;
 const mkPriceId = () =>
   `50000000-0000-4000-8000-${String(++state.priceSeq).padStart(12, '0')}`;
+const mkAssetTxId = () =>
+  `60000000-0000-4000-8000-${String(++state.assetTxSeq).padStart(12, '0')}`;
 
 type QueryArray<T> = T[] & {
   where: (condition: Condition) => QueryArray<T>;
@@ -180,10 +203,10 @@ type QueryArray<T> = T[] & {
 const asQueryArray = <
   T extends
     | AccountRow
-    | TransactionRow
     | AssetRow
     | AssetPositionRow
     | PriceHistoryRow
+    | AssetTransactionRow
     | { id: string }
     | { price: string; pricedAt: Date },
 >(
@@ -208,11 +231,7 @@ const asQueryArray = <
           new Date((a as PriceHistoryRow).pricedAt).valueOf(),
       );
     }
-    return [...queryRows].sort(
-      (a, b) =>
-        new Date((b as TransactionRow).postedAt).valueOf() -
-        new Date((a as TransactionRow).postedAt).valueOf(),
-    );
+    return [...queryRows];
   };
   return queryRows;
 };
@@ -226,12 +245,12 @@ mock.module('@second-brain/db', () => {
             const rows =
               table.__table === 'accounts'
                 ? state.accounts
-                : table.__table === 'transactions'
-                  ? state.transactions
-                  : table.__table === 'assets'
-                    ? state.assets
-                    : table.__table === 'assetPositions'
-                      ? state.assetPositions
+                : table.__table === 'assets'
+                  ? state.assets
+                  : table.__table === 'assetPositions'
+                    ? state.assetPositions
+                    : table.__table === 'assetTransactions'
+                      ? state.assetTransactions
                       : state.priceHistory;
 
             if (table.__table === 'assets') {
@@ -315,6 +334,8 @@ mock.module('@second-brain/db', () => {
                 id: mkAccountId(),
                 name: String(values.name),
                 currency: String(values.currency),
+                baseCurrency: String(values.baseCurrency ?? 'EUR'),
+                openingBalanceEur: String(values.openingBalanceEur ?? 0),
                 accountType: String(values.accountType),
                 createdAt: now(),
                 updatedAt: now(),
@@ -330,6 +351,12 @@ mock.module('@second-brain/db', () => {
                 assetType: String(values.assetType),
                 subtype: values.subtype ? String(values.subtype) : null,
                 symbol: values.symbol ? String(values.symbol) : null,
+                ticker: String(values.ticker ?? values.symbol ?? 'TICKER'),
+                isin: String(values.isin ?? 'ZZ0000000000'),
+                exchange: values.exchange ? String(values.exchange) : null,
+                providerSymbol: values.providerSymbol
+                  ? String(values.providerSymbol)
+                  : null,
                 currency: String(values.currency),
                 isActive: true,
                 notes: values.notes ? String(values.notes) : null,
@@ -373,18 +400,60 @@ mock.module('@second-brain/db', () => {
               return { returning: () => Promise.resolve([row]) };
             }
 
-            const row: TransactionRow = {
-              id: mkTxId(),
-              accountId: String(values.accountId),
-              postedAt: new Date(String(values.postedAt)),
-              amount: String(values.amount),
-              description: String(values.description),
-              category: String(values.category),
-              createdAt: now(),
-              updatedAt: now(),
-            };
-            state.transactions.push(row);
-            return { returning: () => Promise.resolve([row]) };
+            if (table.__table === 'assetTransactions') {
+              const row: AssetTransactionRow = {
+                id: mkAssetTxId(),
+                accountId: String(values.accountId),
+                assetId: String(values.assetId),
+                transactionType: String(values.transactionType),
+                tradedAt: new Date(String(values.tradedAt)),
+                quantity: String(values.quantity ?? '0'),
+                unitPrice: String(values.unitPrice ?? '0'),
+                tradeCurrency: String(values.tradeCurrency ?? 'EUR'),
+                fxRateToEur:
+                  values.fxRateToEur === null ||
+                  values.fxRateToEur === undefined
+                    ? null
+                    : String(values.fxRateToEur),
+                cashImpactEur: String(values.cashImpactEur ?? '0'),
+                feesAmount: String(values.feesAmount ?? '0'),
+                feesCurrency:
+                  values.feesCurrency === null ||
+                  values.feesCurrency === undefined
+                    ? null
+                    : String(values.feesCurrency),
+                dividendGross:
+                  values.dividendGross === null ||
+                  values.dividendGross === undefined
+                    ? null
+                    : String(values.dividendGross),
+                withholdingTax:
+                  values.withholdingTax === null ||
+                  values.withholdingTax === undefined
+                    ? null
+                    : String(values.withholdingTax),
+                dividendNet:
+                  values.dividendNet === null ||
+                  values.dividendNet === undefined
+                    ? null
+                    : String(values.dividendNet),
+                externalReference:
+                  values.externalReference === null ||
+                  values.externalReference === undefined
+                    ? null
+                    : String(values.externalReference),
+                notes:
+                  values.notes === null || values.notes === undefined
+                    ? null
+                    : String(values.notes),
+                createdAt: now(),
+                updatedAt: now(),
+              };
+              state.assetTransactions.push(row);
+              return { returning: () => Promise.resolve([row]) };
+            }
+
+            return { returning: () => Promise.resolve([]) };
           },
         };
       },
@@ -455,30 +524,7 @@ mock.module('@second-brain/db', () => {
                       );
                       return Promise.resolve(updated ? [updated] : []);
                     }
-
-                    let updated: TransactionRow | null = null;
-                    state.transactions = state.transactions.map((tx) => {
-                      if (
-                        String(
-                          tx[condition.column.name as keyof TransactionRow],
-                        ) !== condition.value
-                      ) {
-                        return tx;
-                      }
-                      updated = {
-                        ...tx,
-                        ...values,
-                        postedAt: values.postedAt
-                          ? new Date(String(values.postedAt))
-                          : tx.postedAt,
-                        amount: values.amount
-                          ? String(values.amount)
-                          : tx.amount,
-                        updatedAt: now(),
-                      } as TransactionRow;
-                      return updated;
-                    });
-                    return Promise.resolve(updated ? [updated] : []);
+                    return Promise.resolve([]);
                   },
                 };
               },
@@ -488,20 +534,10 @@ mock.module('@second-brain/db', () => {
       },
       delete() {
         return {
-          where(condition: Condition) {
-            const match = state.transactions.find(
-              (tx) =>
-                String(tx[condition.column.name as keyof TransactionRow]) ===
-                condition.value,
-            );
-            state.transactions = state.transactions.filter(
-              (tx) =>
-                String(tx[condition.column.name as keyof TransactionRow]) !==
-                condition.value,
-            );
+          where() {
             return {
               returning() {
-                return Promise.resolve(match ? [{ id: match.id }] : []);
+                return Promise.resolve([]);
               },
             };
           },
@@ -509,12 +545,42 @@ mock.module('@second-brain/db', () => {
       },
       execute(query?: { text?: string }) {
         const text = query?.text ?? '';
-        if (text.includes('cash_balance')) {
-          const cash = state.transactions.reduce(
-            (sum, tx) => sum + Number(tx.amount),
-            0,
-          );
-          return Promise.resolve([{ cash_balance: cash }]);
+        if (text.includes('with account_cash as')) {
+          return Promise.resolve([makeSummary()]);
+        }
+        if (text.includes('from finances.accounts a')) {
+          const rows = state.accounts.map((account) => ({
+            accountId: account.id,
+            id: account.id,
+            name: account.name,
+            currency: account.currency,
+            baseCurrency: account.baseCurrency,
+            openingBalanceEur: account.openingBalanceEur,
+            accountType: account.accountType,
+            createdAt: account.createdAt,
+            updatedAt: account.updatedAt,
+            currentCashBalanceEur:
+              Number(account.openingBalanceEur) +
+              state.assetTransactions
+                .filter((tx) => tx.accountId === account.id)
+                .reduce((sum, tx) => sum + Number(tx.cashImpactEur), 0),
+            cash_balance:
+              Number(account.openingBalanceEur) +
+              state.assetTransactions
+                .filter((tx) => tx.accountId === account.id)
+                .reduce((sum, tx) => sum + Number(tx.cashImpactEur), 0),
+          }));
+          if (text.includes('where a.id')) {
+            return Promise.resolve(rows.slice(0, 1));
+          }
+          if (text.includes('sum(a.opening_balance_eur)')) {
+            const total = rows.reduce(
+              (sum, row) => sum + Number(row.currentCashBalanceEur),
+              0,
+            );
+            return Promise.resolve([{ cash_balance: total }]);
+          }
+          return Promise.resolve(rows.reverse());
         }
         if (text.includes('with latest as')) {
           const bySymbol = new Map<string, PriceHistoryRow>();
@@ -551,7 +617,7 @@ mock.module('@second-brain/db', () => {
             },
           ]);
         }
-        return Promise.resolve([makeSummary()]);
+        return Promise.resolve([]);
       },
     },
   });
@@ -578,7 +644,7 @@ mock.module('@second-brain/db', () => {
     assetPositions: assetPositionsTable,
     accounts: accountsTable,
     priceHistory: priceHistoryTable,
-    transactions: transactionsTable,
+    assetTransactions: assetTransactionsTable,
     and,
     eq,
     desc,
@@ -598,15 +664,15 @@ const parseResponse = async <T>(response: Response): Promise<T> =>
 
 beforeEach(() => {
   state.accounts = [];
-  state.transactions = [];
   state.assets = [];
   state.assetPositions = [];
   state.priceHistory = [];
+  state.assetTransactions = [];
   state.accountSeq = 0;
-  state.txSeq = 0;
   state.assetSeq = 0;
   state.assetPositionSeq = 0;
   state.priceSeq = 0;
+  state.assetTxSeq = 0;
 });
 
 const buildApp = () => {
@@ -634,6 +700,7 @@ describe('finances routes', () => {
         body: JSON.stringify({
           name: 'Main',
           currency: 'USD',
+          openingBalanceEur: 150,
           accountType: 'checking',
         }),
       }),
@@ -657,7 +724,7 @@ describe('finances routes', () => {
     expect(invalid.code).toBe('VALIDATION_ERROR');
   });
 
-  test('creates transaction, filters list, and rejects missing account', async () => {
+  test('creates and lists asset transactions with account validation', async () => {
     const app = buildApp();
 
     const createAccountRes = await app.handle(
@@ -667,140 +734,76 @@ describe('finances routes', () => {
         body: JSON.stringify({
           name: 'Main',
           currency: 'USD',
+          openingBalanceEur: 150,
           accountType: 'checking',
         }),
       }),
     );
     const account = await parseResponse<{ id: string }>(createAccountRes);
 
-    const txRes = await app.handle(
-      createRequest('/finances/transactions', {
+    const createAssetRes = await app.handle(
+      createRequest('/finances/assets', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Apple',
+          assetType: 'stock',
+          ticker: 'AAPL',
+          isin: 'US0378331005',
+          symbol: 'AAPL',
+          currency: 'USD',
+          quantity: 10,
+          manualPrice: 150,
+        }),
+      }),
+    );
+    const asset = await parseResponse<{ id: string }>(createAssetRes);
+
+    const createTxRes = await app.handle(
+      createRequest('/finances/asset-transactions', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           accountId: account.id,
-          postedAt: new Date().toISOString(),
-          amount: 123.45,
-          description: 'Paycheck',
-          category: 'income',
+          assetType: 'stock',
+          assetId: asset.id,
+          transactionType: 'buy',
+          tradedAt: new Date().toISOString(),
+          quantity: 1,
+          unitPrice: 100,
+          tradeCurrency: 'EUR',
+          feesAmount: 0,
         }),
       }),
     );
-    expect(txRes.status).toBe(201);
-    const tx = await parseResponse<{ amount: number; accountId: string }>(
-      txRes,
-    );
-    expect(tx.amount).toBe(123.45);
-    expect(tx.accountId).toBe(account.id);
+    expect(createTxRes.status).toBe(201);
 
-    const filteredRes = await app.handle(
-      createRequest(`/finances/transactions?accountId=${account.id}`),
+    const listedRes = await app.handle(
+      createRequest(`/finances/asset-transactions?accountId=${account.id}`),
     );
-    expect(filteredRes.status).toBe(200);
-    const filtered =
-      await parseResponse<Array<{ accountId: string }>>(filteredRes);
-    expect(filtered.length).toBe(1);
-    expect(filtered[0]?.accountId).toBe(account.id);
+    expect(listedRes.status).toBe(200);
+    const listed = await parseResponse<Array<{ accountId: string }>>(listedRes);
+    expect(listed.length).toBe(1);
+    expect(listed[0]?.accountId).toBe(account.id);
 
     const missingAccountRes = await app.handle(
-      createRequest('/finances/transactions', {
+      createRequest('/finances/asset-transactions', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
           accountId: '20000000-0000-4000-8000-000000000001',
-          postedAt: new Date().toISOString(),
-          amount: 1,
-          description: 'x',
-          category: 'y',
+          assetType: 'stock',
+          assetId: asset.id,
+          transactionType: 'buy',
+          tradedAt: new Date().toISOString(),
+          quantity: 1,
+          unitPrice: 100,
+          tradeCurrency: 'EUR',
+          feesAmount: 0,
         }),
       }),
     );
     expect(missingAccountRes.status).toBe(404);
-    const missing = await parseResponse<{ code: string }>(missingAccountRes);
-    expect(missing.code).toBe('ACCOUNT_NOT_FOUND');
-  });
-
-  test('updates and deletes transaction with not found checks', async () => {
-    const app = buildApp();
-
-    const createAccountRes = await app.handle(
-      createRequest('/finances/accounts', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          name: 'Main',
-          currency: 'USD',
-          accountType: 'checking',
-        }),
-      }),
-    );
-    const account = await parseResponse<{ id: string }>(createAccountRes);
-
-    const createTxRes = await app.handle(
-      createRequest('/finances/transactions', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          accountId: account.id,
-          postedAt: new Date().toISOString(),
-          amount: 10,
-          description: 'Coffee',
-          category: 'food',
-        }),
-      }),
-    );
-    const tx = await parseResponse<{ id: string }>(createTxRes);
-
-    const badPatchRes = await app.handle(
-      createRequest(`/finances/transactions/${tx.id}`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({}),
-      }),
-    );
-    expect(badPatchRes.status).toBe(400);
-
-    const updateRes = await app.handle(
-      createRequest(`/finances/transactions/${tx.id}`, {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          amount: -15.75,
-          description: 'Lunch',
-          category: 'food',
-          postedAt: new Date().toISOString(),
-        }),
-      }),
-    );
-    expect(updateRes.status).toBe(200);
-    const updated = await parseResponse<{
-      amount: number;
-      description: string;
-    }>(updateRes);
-    expect(updated.amount).toBe(-15.75);
-    expect(updated.description).toBe('Lunch');
-
-    const missingUpdateRes = await app.handle(
-      createRequest(
-        '/finances/transactions/10000000-0000-4000-8000-999999999999',
-        {
-          method: 'PATCH',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ amount: 1 }),
-        },
-      ),
-    );
-    expect(missingUpdateRes.status).toBe(404);
-
-    const deleteRes = await app.handle(
-      createRequest(`/finances/transactions/${tx.id}`, { method: 'DELETE' }),
-    );
-    expect(deleteRes.status).toBe(204);
-
-    const missingDeleteRes = await app.handle(
-      createRequest(`/finances/transactions/${tx.id}`, { method: 'DELETE' }),
-    );
-    expect(missingDeleteRes.status).toBe(404);
   });
 
   test('computes summary zeros and month-boundary totals', async () => {
@@ -829,11 +832,30 @@ describe('finances routes', () => {
         body: JSON.stringify({
           name: 'Main',
           currency: 'USD',
+          openingBalanceEur: 0,
           accountType: 'checking',
         }),
       }),
     );
     const account = await parseResponse<{ id: string }>(createAccountRes);
+
+    const createAssetRes = await app.handle(
+      createRequest('/finances/assets', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Apple',
+          assetType: 'stock',
+          ticker: 'AAPL',
+          isin: 'US0378331005',
+          symbol: 'AAPL',
+          currency: 'USD',
+          quantity: 10,
+          manualPrice: 150,
+        }),
+      }),
+    );
+    const asset = await parseResponse<{ id: string }>(createAssetRes);
 
     const inMonthDate = new Date();
     const previousMonthDate = new Date(inMonthDate);
@@ -842,28 +864,46 @@ describe('finances routes', () => {
     for (const payload of [
       {
         accountId: account.id,
-        postedAt: inMonthDate.toISOString(),
-        amount: 500,
-        description: 'Salary',
-        category: 'income',
+        assetType: 'stock',
+        assetId: asset.id,
+        transactionType: 'dividend',
+        tradedAt: inMonthDate.toISOString(),
+        quantity: 0,
+        unitPrice: 0,
+        tradeCurrency: 'EUR',
+        feesAmount: 0,
+        dividendGross: 500,
+        withholdingTax: 0,
+        dividendNet: 500,
       },
       {
         accountId: account.id,
-        postedAt: inMonthDate.toISOString(),
-        amount: -120,
-        description: 'Groceries',
-        category: 'food',
+        assetType: 'stock',
+        assetId: asset.id,
+        transactionType: 'fee',
+        tradedAt: inMonthDate.toISOString(),
+        quantity: 0,
+        unitPrice: 0,
+        tradeCurrency: 'EUR',
+        feesAmount: 120,
       },
       {
         accountId: account.id,
-        postedAt: previousMonthDate.toISOString(),
-        amount: 50,
-        description: 'Old adjustment',
-        category: 'misc',
+        assetType: 'stock',
+        assetId: asset.id,
+        transactionType: 'dividend',
+        tradedAt: previousMonthDate.toISOString(),
+        quantity: 0,
+        unitPrice: 0,
+        tradeCurrency: 'EUR',
+        feesAmount: 0,
+        dividendGross: 50,
+        withholdingTax: 0,
+        dividendNet: 50,
       },
     ]) {
       await app.handle(
-        createRequest('/finances/transactions', {
+        createRequest('/finances/asset-transactions', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(payload),
@@ -898,6 +938,8 @@ describe('finances routes', () => {
           name: 'SPY',
           assetType: 'etf',
           symbol: 'SPY',
+          ticker: 'SPY',
+          isin: 'US78462F1030',
           currency: 'USD',
           quantity: 2,
           manualPrice: 500,
@@ -952,25 +994,12 @@ describe('finances routes', () => {
         body: JSON.stringify({
           name: 'Brokerage Cash',
           currency: 'USD',
+          openingBalanceEur: 1000,
           accountType: 'checking',
         }),
       }),
     );
-    const account = await parseResponse<{ id: string }>(accountRes);
-
-    await app.handle(
-      createRequest('/finances/transactions', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          accountId: account.id,
-          postedAt: new Date().toISOString(),
-          amount: 1000,
-          description: 'Deposit',
-          category: 'cash',
-        }),
-      }),
-    );
+    await parseResponse<{ id: string }>(accountRes);
 
     await app.handle(
       createRequest('/finances/assets', {
@@ -979,6 +1008,7 @@ describe('finances routes', () => {
         body: JSON.stringify({
           name: 'Real Estate Unit',
           assetType: 'real_estate',
+          ticker: 'REUNIT',
           quantity: 1,
           manualPrice: 250000,
           currency: 'USD',
@@ -994,6 +1024,8 @@ describe('finances routes', () => {
           name: 'Apple',
           assetType: 'stock',
           symbol: 'AAPL',
+          ticker: 'AAPL',
+          isin: 'US0378331005',
           quantity: 10,
           manualPrice: 150,
           currency: 'USD',
