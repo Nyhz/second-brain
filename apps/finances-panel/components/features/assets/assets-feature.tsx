@@ -13,7 +13,6 @@ import {
   DataTable,
   EmptyState,
   ErrorState,
-  KpiCard,
   LoadingSkeleton,
   Modal,
 } from '../../ui';
@@ -35,13 +34,6 @@ type CreateAssetForm = {
   currency: string;
 };
 
-type PositionForm = {
-  assetId: string;
-  quantity: string;
-  averageCost: string;
-  manualPrice: string;
-};
-
 type MetadataForm = {
   assetId: string;
   name: string;
@@ -59,13 +51,6 @@ const initialCreateForm: CreateAssetForm = {
   providerSymbol: '',
   isin: '',
   currency: 'EUR',
-};
-
-const initialPositionForm: PositionForm = {
-  assetId: '',
-  quantity: '1',
-  averageCost: '',
-  manualPrice: '',
 };
 
 const initialMetadataForm: MetadataForm = {
@@ -119,17 +104,13 @@ export function AssetsFeature() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [isPositionModalOpen, setIsPositionModalOpen] = useState(false);
   const [isMetadataModalOpen, setIsMetadataModalOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
-  const [isUpdatingPosition, setIsUpdatingPosition] = useState(false);
   const [isUpdatingMetadata, setIsUpdatingMetadata] = useState(false);
   const [deactivatingId, setDeactivatingId] = useState<string | null>(null);
 
   const [createForm, setCreateForm] =
     useState<CreateAssetForm>(initialCreateForm);
-  const [positionForm, setPositionForm] =
-    useState<PositionForm>(initialPositionForm);
   const [metadataForm, setMetadataForm] =
     useState<MetadataForm>(initialMetadataForm);
 
@@ -154,12 +135,11 @@ export function AssetsFeature() {
     () => rows.filter((row) => row.isActive).length,
     [rows],
   );
-  const pricedCount = useMemo(
-    () => rows.filter((row) => row.resolvedUnitPrice !== null).length,
-    [rows],
-  );
-  const totalValue = useMemo(
-    () => rows.reduce((sum, row) => sum + Number(row.currentValue ?? 0), 0),
+  const trackedCount = useMemo(
+    () =>
+      rows.filter(
+        (row) => Boolean(row.providerSymbol ?? row.symbol ?? row.ticker),
+      ).length,
     [rows],
   );
 
@@ -215,55 +195,6 @@ export function AssetsFeature() {
       setErrorMessage(getApiErrorMessage(error));
     } finally {
       setIsCreating(false);
-    }
-  };
-
-  const openPositionModal = (asset: AssetWithPosition) => {
-    setPositionForm({
-      assetId: asset.id,
-      quantity: String(asset.position?.quantity ?? 1),
-      averageCost:
-        asset.position?.averageCost === null ||
-        asset.position?.averageCost === undefined
-          ? ''
-          : String(asset.position.averageCost),
-      manualPrice:
-        asset.position?.manualPrice === null ||
-        asset.position?.manualPrice === undefined
-          ? ''
-          : String(asset.position.manualPrice),
-    });
-    setIsPositionModalOpen(true);
-  };
-
-  const updatePosition = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-
-    const quantity = Number(positionForm.quantity);
-    if (!Number.isFinite(quantity) || quantity <= 0) {
-      setErrorMessage('Position quantity must be greater than 0.');
-      return;
-    }
-
-    setIsUpdatingPosition(true);
-    try {
-      await apiRequest(`/finances/assets/${positionForm.assetId}/position`, {
-        method: 'PUT',
-        body: JSON.stringify({
-          quantity,
-          averageCost: toNullableNumber(positionForm.averageCost) ?? null,
-          manualPrice: toNullableNumber(positionForm.manualPrice) ?? null,
-          manualPriceAsOf: positionForm.manualPrice.trim()
-            ? new Date().toISOString()
-            : null,
-        }),
-      });
-      setIsPositionModalOpen(false);
-      await load();
-    } catch (error) {
-      setErrorMessage(getApiErrorMessage(error));
-    } finally {
-      setIsUpdatingPosition(false);
     }
   };
 
@@ -366,12 +297,28 @@ export function AssetsFeature() {
 
       {errorMessage ? <ErrorState message={errorMessage} /> : null}
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard label="Active Assets" value={String(activeCount)} />
-        <KpiCard label="Priced Assets" value={String(pricedCount)} />
-        <KpiCard label="Tracked Assets" value={String(rows.length)} />
-        <KpiCard label="Current Value (EUR)" value={formatMoney(totalValue)} />
-      </section>
+      <Card title="Assets Summary">
+        <div className="grid gap-3 sm:grid-cols-3">
+          <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">
+              Total Assets
+            </p>
+            <p className="text-xl font-semibold">{rows.length}</p>
+          </div>
+          <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">
+              Active
+            </p>
+            <p className="text-xl font-semibold">{activeCount}</p>
+          </div>
+          <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2">
+            <p className="text-xs uppercase tracking-wide text-muted-foreground">
+              Tracked
+            </p>
+            <p className="text-xl font-semibold">{trackedCount}</p>
+          </div>
+        </div>
+      </Card>
 
       <Card title="Asset Registry">
         {isLoading ? (
@@ -388,7 +335,7 @@ export function AssetsFeature() {
                   <div>
                     <div className="font-medium">{row.name}</div>
                     <div className="text-xs text-muted-foreground">
-                      {row.symbol ?? row.ticker ?? row.isin}
+                      {row.symbol ?? row.isin ?? '-'}
                     </div>
                   </div>
                 ),
@@ -401,13 +348,7 @@ export function AssetsFeature() {
               {
                 key: 'symbol',
                 header: 'Symbol',
-                render: (row: AssetWithPosition) =>
-                  row.symbol ?? row.ticker ?? '-',
-              },
-              {
-                key: 'providerSymbol',
-                header: 'Provider Symbol',
-                render: (row: AssetWithPosition) => row.providerSymbol ?? '-',
+                render: (row: AssetWithPosition) => row.symbol ?? '-',
               },
               {
                 key: 'isin',
@@ -447,14 +388,6 @@ export function AssetsFeature() {
                 header: 'Actions',
                 render: (row: AssetWithPosition) => (
                   <div className="flex flex-wrap gap-2">
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => openPositionModal(row)}
-                    >
-                      Position
-                    </Button>
                     <Button
                       type="button"
                       size="sm"
@@ -626,92 +559,6 @@ export function AssetsFeature() {
             fullWidth
           >
             {isCreating ? 'Creating...' : 'Create Asset'}
-          </Button>
-        </form>
-      </Modal>
-
-      <Modal
-        open={isPositionModalOpen}
-        title="Update Position"
-        onClose={() => {
-          if (!isUpdatingPosition) {
-            setIsPositionModalOpen(false);
-          }
-        }}
-      >
-        <form className="grid gap-4" onSubmit={updatePosition}>
-          <div className="grid gap-1.5">
-            <label className="text-sm font-medium" htmlFor="position-quantity">
-              Quantity
-            </label>
-            <input
-              id="position-quantity"
-              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-              type="number"
-              step="0.000001"
-              min="0"
-              value={positionForm.quantity}
-              onChange={(event) =>
-                setPositionForm((current) => ({
-                  ...current,
-                  quantity: event.target.value,
-                }))
-              }
-              required
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <label
-              className="text-sm font-medium"
-              htmlFor="position-average-cost"
-            >
-              Average Cost (Optional)
-            </label>
-            <input
-              id="position-average-cost"
-              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-              type="number"
-              step="0.000001"
-              min="0"
-              value={positionForm.averageCost}
-              onChange={(event) =>
-                setPositionForm((current) => ({
-                  ...current,
-                  averageCost: event.target.value,
-                }))
-              }
-            />
-          </div>
-          <div className="grid gap-1.5">
-            <label
-              className="text-sm font-medium"
-              htmlFor="position-manual-price"
-            >
-              Manual Price (Optional)
-            </label>
-            <input
-              id="position-manual-price"
-              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-              type="number"
-              step="0.000001"
-              min="0"
-              value={positionForm.manualPrice}
-              onChange={(event) =>
-                setPositionForm((current) => ({
-                  ...current,
-                  manualPrice: event.target.value,
-                }))
-              }
-            />
-          </div>
-
-          <Button
-            type="submit"
-            variant="primary"
-            disabled={isUpdatingPosition}
-            fullWidth
-          >
-            {isUpdatingPosition ? 'Updating...' : 'Update Position'}
           </Button>
         </form>
       </Modal>

@@ -18,6 +18,7 @@ type Point = {
   value: number;
   dateIso?: string;
 };
+const RETURN_PCT_MIN_BASELINE_EUR = 1;
 
 export function AreaPerformanceChart({
   data,
@@ -34,6 +35,21 @@ export function AreaPerformanceChart({
     baseline ??
     data.find((point) => Number.isFinite(point.value))?.value ??
     undefined;
+  const tooltipPctDenominator = useMemo(() => {
+    if (
+      effectiveBaseline !== undefined &&
+      Number.isFinite(effectiveBaseline) &&
+      Math.abs(effectiveBaseline) >= RETURN_PCT_MIN_BASELINE_EUR
+    ) {
+      return Math.abs(effectiveBaseline);
+    }
+    const firstMeaningful = data.find(
+      (point) =>
+        Number.isFinite(point.value) &&
+        Math.abs(point.value) >= RETURN_PCT_MIN_BASELINE_EUR,
+    )?.value;
+    return firstMeaningful !== undefined ? Math.abs(firstMeaningful) : undefined;
+  }, [data, effectiveBaseline]);
   const niceStep = (rawStep: number) => {
     if (!Number.isFinite(rawStep) || rawStep <= 0) return 1;
     const exponent = Math.floor(Math.log10(rawStep));
@@ -116,12 +132,14 @@ export function AreaPerformanceChart({
     if (
       effectiveBaseline === undefined ||
       !Number.isFinite(effectiveBaseline) ||
-      Math.abs(effectiveBaseline) < 1e-9
+      tooltipPctDenominator === undefined ||
+      !Number.isFinite(tooltipPctDenominator) ||
+      tooltipPctDenominator < 1e-9
     ) {
       return '+0,00%';
     }
     const percent =
-      ((value - effectiveBaseline) / Math.abs(effectiveBaseline)) * 100;
+      ((value - effectiveBaseline) / tooltipPctDenominator) * 100;
     const formatted = percent.toLocaleString('es-ES', {
       minimumFractionDigits: 2,
       maximumFractionDigits: 2,

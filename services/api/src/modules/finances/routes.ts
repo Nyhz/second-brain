@@ -187,6 +187,7 @@ const serializeAssetTransaction = (
 
 const round2 = (value: number) => Number(value.toFixed(2));
 const EURUSD_FX_SYMBOL = 'EURUSD=X';
+const RETURN_PCT_MIN_BASELINE_EUR = 1;
 
 const OVERVIEW_RANGES: OverviewRange[] = ['1W', '1M', 'YTD', '1Y', 'MAX'];
 
@@ -3803,10 +3804,19 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         tsIso: new Date(tsMs).toISOString(),
         value: portfolioTotalAt(tsMs, true),
       }));
-      const totalValue = series[series.length - 1]?.value ?? portfolioTotalAt(asOfMs, true);
+      const totalValue =
+        series[series.length - 1]?.value ?? portfolioTotalAt(asOfMs, true);
       const baselineTotalValue = series[0]?.value ?? totalValue;
       const deltaValue = round2(totalValue - baselineTotalValue);
-      const pctDenominator = Math.abs(baselineTotalValue);
+      const firstMeaningfulSeriesValue = series.find(
+        (point) => Math.abs(point.value) >= RETURN_PCT_MIN_BASELINE_EUR,
+      )?.value;
+      const pctDenominator =
+        Math.abs(baselineTotalValue) >= RETURN_PCT_MIN_BASELINE_EUR
+          ? Math.abs(baselineTotalValue)
+          : firstMeaningfulSeriesValue !== undefined
+            ? Math.abs(firstMeaningfulSeriesValue)
+            : 0;
       const deltaPct =
         pctDenominator === 0
           ? 0
