@@ -145,6 +145,11 @@ const transactionImportRowsTable = {
   id: { table: 'transactionImportRows', name: 'id' },
 };
 
+const accountCashMovementsTable = {
+  __table: 'accountCashMovements',
+  id: { table: 'accountCashMovements', name: 'id' },
+};
+
 type Condition = {
   column: { name: string };
   value: string | boolean;
@@ -709,6 +714,7 @@ mock.module('@second-brain/db', () => {
     accounts: accountsTable,
     priceHistory: priceHistoryTable,
     assetTransactions: assetTransactionsTable,
+    accountCashMovements: accountCashMovementsTable,
     transactionImports: transactionImportsTable,
     transactionImportRows: transactionImportRowsTable,
     and,

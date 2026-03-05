@@ -87,7 +87,10 @@ export const assetTransactionSchema = z.object({
   dividendGross: z.number().nullable(),
   withholdingTax: z.number().nullable(),
   dividendNet: z.number().nullable(),
+  linkedTransactionId: z.string().uuid().nullable().optional(),
   externalReference: z.string().nullable(),
+  rowFingerprint: z.string().nullable().optional(),
+  source: z.string().nullable().optional(),
   notes: z.string().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -199,6 +202,159 @@ export const degiroImportResultSchema = z.object({
 });
 
 export type DegiroImportResult = z.infer<typeof degiroImportResultSchema>;
+
+export const degiroAccountStatementAnalyzeRequestSchema = z.object({
+  accountId: z.string().uuid(),
+  fileName: z.string().trim().min(1),
+  csvText: z.string().trim().min(1),
+});
+export type DegiroAccountStatementAnalyzeRequest = z.infer<
+  typeof degiroAccountStatementAnalyzeRequestSchema
+>;
+
+export const degiroAccountStatementUnresolvedAssetSchema = z.object({
+  isin: z.string().length(12),
+  name: z.string().min(1),
+  symbolHint: z.string().nullable(),
+  currencyHint: z.string().length(3),
+  typeHint: assetTypeSchema,
+});
+export type DegiroAccountStatementUnresolvedAsset = z.infer<
+  typeof degiroAccountStatementUnresolvedAssetSchema
+>;
+
+export const degiroAccountStatementPreviewRowSchema = z.object({
+  rowNumber: z.number().int().positive(),
+  rowType: z.string(),
+  status: z.enum(['ready', 'unresolved', 'failed', 'ignored']),
+  reason: z.string().nullable().optional(),
+  description: z.string().nullable().optional(),
+  externalReference: z.string().nullable().optional(),
+  rowFingerprint: z.string().nullable().optional(),
+});
+export type DegiroAccountStatementPreviewRow = z.infer<
+  typeof degiroAccountStatementPreviewRowSchema
+>;
+
+export const degiroAccountStatementAnalyzeTotalsSchema = z.object({
+  totalRows: z.number().int().nonnegative(),
+  readyRows: z.number().int().nonnegative(),
+  unresolvedRows: z.number().int().nonnegative(),
+  failedRows: z.number().int().nonnegative(),
+  ignoredRows: z.number().int().nonnegative(),
+  expectedFinalCashEur: z.number(),
+  computedFinalCashEur: z.number(),
+  deltaEur: z.number(),
+});
+export type DegiroAccountStatementAnalyzeTotals = z.infer<
+  typeof degiroAccountStatementAnalyzeTotalsSchema
+>;
+
+export const degiroAccountStatementAnalyzeResultSchema = z.object({
+  source: z.literal('degiro_account_statement'),
+  fileHash: z.string(),
+  totals: degiroAccountStatementAnalyzeTotalsSchema,
+  categoryBreakdown: z.record(z.string(), z.number().int().nonnegative()),
+  unresolvedAssets: z.array(degiroAccountStatementUnresolvedAssetSchema),
+  previewRows: z.array(degiroAccountStatementPreviewRowSchema),
+  warnings: z.array(z.string()),
+  errors: z.array(z.string()),
+});
+export type DegiroAccountStatementAnalyzeResult = z.infer<
+  typeof degiroAccountStatementAnalyzeResultSchema
+>;
+
+export const degiroAccountStatementImportRequestSchema = z.object({
+  accountId: z.string().uuid(),
+  fileName: z.string().trim().min(1),
+  csvText: z.string().trim().min(1),
+  dryRun: z.boolean().default(true),
+});
+export type DegiroAccountStatementImportRequest = z.infer<
+  typeof degiroAccountStatementImportRequestSchema
+>;
+
+export const degiroAccountStatementImportRowResultSchema = z.object({
+  rowNumber: z.number().int().positive(),
+  rowType: z.string(),
+  rowFingerprint: z.string().nullable().optional(),
+  status: z.enum(['imported', 'skipped', 'failed']),
+  reason: z.string().nullable().optional(),
+  externalReference: z.string().nullable().optional(),
+  assetId: z.string().uuid().nullable().optional(),
+  transactionId: z.string().uuid().nullable().optional(),
+  movementTable: z.enum(['asset_transaction', 'cash_movement']).nullable(),
+  movementId: z.string().uuid().nullable().optional(),
+});
+export type DegiroAccountStatementImportRowResult = z.infer<
+  typeof degiroAccountStatementImportRowResultSchema
+>;
+
+export const degiroAccountStatementImportResultSchema = z.object({
+  importId: z.string().uuid(),
+  source: z.literal('degiro_account_statement'),
+  fileName: z.string(),
+  fileHash: z.string(),
+  dryRun: z.boolean(),
+  totalRows: z.number().int().nonnegative(),
+  importedRows: z.number().int().nonnegative(),
+  skippedRows: z.number().int().nonnegative(),
+  failedRows: z.number().int().nonnegative(),
+  linkedFeeRows: z.number().int().nonnegative(),
+  createdCashMovements: z.number().int().nonnegative(),
+  createdAssetTransactions: z.number().int().nonnegative(),
+  expectedFinalCashEur: z.number(),
+  computedFinalCashEur: z.number(),
+  deltaEur: z.number(),
+  results: z.array(degiroAccountStatementImportRowResultSchema),
+});
+export type DegiroAccountStatementImportResult = z.infer<
+  typeof degiroAccountStatementImportResultSchema
+>;
+
+export const accountCashMovementSchema = z.object({
+  id: z.string().uuid(),
+  accountId: z.string().uuid(),
+  movementType: z.string(),
+  occurredAt: z.string(),
+  valueDate: z.string().nullable(),
+  nativeAmount: z.number(),
+  currency: z.string().length(3),
+  fxRateToEur: z.number().nullable(),
+  cashImpactEur: z.number(),
+  externalReference: z.string().nullable(),
+  rowFingerprint: z.string().nullable(),
+  source: z.string(),
+  description: z.string().nullable(),
+  affectsCashBalance: z.boolean(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+export type AccountCashMovement = z.infer<typeof accountCashMovementSchema>;
+
+export const unifiedTransactionRowSchema = z.object({
+  id: z.string().uuid(),
+  rowKind: z.enum(['asset_transaction', 'cash_movement']),
+  accountId: z.string().uuid(),
+  occurredAt: z.string(),
+  valueDate: z.string().nullable(),
+  transactionType: assetTransactionTypeSchema.nullable(),
+  movementType: z.string().nullable(),
+  assetId: z.string().uuid().nullable(),
+  assetType: assetTypeSchema.nullable(),
+  assetLabel: z.string().nullable(),
+  quantity: z.number().nullable(),
+  unitPrice: z.number().nullable(),
+  amountNative: z.number(),
+  currency: z.string().length(3),
+  fxRateToEur: z.number().nullable(),
+  cashImpactEur: z.number(),
+  linkedTransactionId: z.string().uuid().nullable(),
+  notes: z.string().nullable(),
+  externalReference: z.string().nullable(),
+  source: z.string().nullable(),
+});
+export type UnifiedTransactionRow = z.infer<typeof unifiedTransactionRowSchema>;
 
 export const financesSummarySchema = z.object({
   totalBalance: z.number(),
@@ -353,7 +509,6 @@ export const portfolioSummarySchema = z.object({
 export type PortfolioSummary = z.infer<typeof portfolioSummarySchema>;
 
 export const overviewRangeSchema = z.enum([
-  '1D',
   '1W',
   '1M',
   'YTD',
@@ -376,6 +531,7 @@ export type OverviewSeriesPoint = z.infer<typeof overviewSeriesPointSchema>;
 
 export const overviewPositionRowSchema = z.object({
   assetId: z.string().uuid(),
+  assetType: assetTypeSchema,
   symbol: z.string().min(1),
   name: z.string().min(1),
   quoteCurrency: z.string().length(3),

@@ -2,11 +2,12 @@
 
 import type {
   Account,
-  AssetTransaction,
   AssetTransactionType,
   AssetType,
   AssetWithPosition,
-  DegiroImportResult,
+  DegiroAccountStatementAnalyzeResult,
+  DegiroAccountStatementImportResult,
+  UnifiedTransactionRow,
 } from '@second-brain/types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
@@ -53,7 +54,15 @@ type TaxSummary = {
   realizedGainLossEur: number;
 };
 
-const txTypes: AssetTransactionType[] = ['buy', 'sell', 'dividend'];
+type UnresolvedAssetDraft = {
+  isin: string;
+  name: string;
+  symbol: string;
+  currency: string;
+  assetType: AssetType;
+};
+
+const txTypes: AssetTransactionType[] = ['buy', 'sell', 'fee', 'dividend'];
 const v1AssetTypes: AssetType[] = [
   'stock',
   'etf',
@@ -72,19 +81,37 @@ const formatAmountWithCurrency = (
   return `${amount.toFixed(4)} ${currency}`;
 };
 
-const prettyAssetType = (assetType: AssetType) => {
+const prettyAssetType = (assetType: AssetType | null) => {
   if (assetType === 'mutual_fund') return 'Investment Fund';
   if (assetType === 'retirement_fund') return 'Retirement Fund';
   if (assetType === 'etf') return 'ETF';
   if (assetType === 'stock') return 'Stock';
   if (assetType === 'crypto') return 'Crypto';
+  if (!assetType) return '-';
   return assetType;
 };
+
+const prettyTxType = (row: UnifiedTransactionRow) => {
+  if (row.rowKind === 'asset_transaction') {
+    return row.transactionType ?? '-';
+  }
+  return row.movementType ?? 'cash_movement';
+};
+
+const unresolvedToDraft = (
+  row: DegiroAccountStatementAnalyzeResult['unresolvedAssets'][number],
+): UnresolvedAssetDraft => ({
+  isin: row.isin,
+  name: row.name,
+  symbol: row.symbolHint ?? row.isin.slice(-6),
+  currency: row.currencyHint,
+  assetType: row.typeHint,
+});
 
 export function TransactionsFeature() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [assets, setAssets] = useState<AssetWithPosition[]>([]);
-  const [rows, setRows] = useState<AssetTransaction[]>([]);
+  const [rows, setRows] = useState<UnifiedTransactionRow[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [deletingTransactionId, setDeletingTransactionId] = useState<
@@ -92,17 +119,24 @@ export function TransactionsFeature() {
   >(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
+  const [isAnalyzingImport, setIsAnalyzingImport] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [isCreatingMissingAsset, setIsCreatingMissingAsset] = useState(false);
   const [isTaxLoading, setIsTaxLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [taxSummary, setTaxSummary] = useState<TaxSummary | null>(null);
   const [taxYear, setTaxYear] = useState(new Date().getUTCFullYear());
+
   const [importAccountId, setImportAccountId] = useState('');
   const [importDryRun, setImportDryRun] = useState(true);
   const [importFile, setImportFile] = useState<File | null>(null);
-  const [importResult, setImportResult] = useState<DegiroImportResult | null>(
-    null,
-  );
+  const [importCsvText, setImportCsvText] = useState<string | null>(null);
+  const [analyzeResult, setAnalyzeResult] =
+    useState<DegiroAccountStatementAnalyzeResult | null>(null);
+  const [importResult, setImportResult] =
+    useState<DegiroAccountStatementImportResult | null>(null);
+  const [unresolvedDraft, setUnresolvedDraft] =
+    useState<UnresolvedAssetDraft | null>(null);
 
   const [form, setForm] = useState<TransactionFormInput>(initialForm());
 
@@ -203,6 +237,9 @@ export function TransactionsFeature() {
     if (form.transactionType === 'sell') {
       return toEur(quantity * unitPrice) - toEur(feesAmount);
     }
+    if (form.transactionType === 'fee') {
+      return -toEur(feesAmount);
+    }
     if (form.transactionType === 'dividend') {
       const net = Number(form.dividendNet || '0');
       return toEur(net);
@@ -246,11 +283,15 @@ export function TransactionsFeature() {
     }
   };
 
-  const deleteTransaction = async (transaction: AssetTransaction) => {
+  const deleteTransaction = async (transaction: UnifiedTransactionRow) => {
+    if (transaction.rowKind !== 'asset_transaction') {
+      return;
+    }
+
     if (
       !window.confirm(
         `Delete ${transaction.transactionType} transaction from ${formatDateTime(
-          transaction.tradedAt,
+          transaction.occurredAt,
         )}?`,
       )
     ) {
@@ -274,9 +315,13 @@ export function TransactionsFeature() {
   const onImportFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const next = event.target.files?.[0] ?? null;
     setImportFile(next);
+    setImportCsvText(null);
+    setAnalyzeResult(null);
+    setImportResult(null);
+    setUnresolvedDraft(null);
   };
 
-  const importDegiroCsv = async (event: FormEvent<HTMLFormElement>) => {
+  const runAnalyze = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!importAccountId) {
       setErrorMessage('Select an account before importing.');
@@ -291,26 +336,117 @@ export function TransactionsFeature() {
       return;
     }
 
-    setIsImporting(true);
+    setIsAnalyzingImport(true);
     try {
       const csvText = await importFile.text();
-      const result = await apiRequest<DegiroImportResult>(
-        '/finances/import/degiro-transactions',
+      setImportCsvText(csvText);
+      const result = await apiRequest<DegiroAccountStatementAnalyzeResult>(
+        '/finances/import/degiro-account-statement/analyze',
         {
           method: 'POST',
           body: JSON.stringify({
             accountId: importAccountId,
             fileName: importFile.name,
             csvText,
+          }),
+        },
+      );
+      setAnalyzeResult(result);
+      setImportResult(null);
+      setUnresolvedDraft(
+        result.unresolvedAssets[0]
+          ? unresolvedToDraft(result.unresolvedAssets[0])
+          : null,
+      );
+      setErrorMessage(null);
+    } catch (error) {
+      setErrorMessage(getApiErrorMessage(error));
+    } finally {
+      setIsAnalyzingImport(false);
+    }
+  };
+
+  const createMissingAsset = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!unresolvedDraft) {
+      return;
+    }
+
+    setIsCreatingMissingAsset(true);
+    try {
+      const symbol = unresolvedDraft.symbol.trim().toUpperCase();
+      const ticker = symbol || unresolvedDraft.isin.slice(-6);
+      await apiRequest('/finances/assets', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: unresolvedDraft.name.trim(),
+          assetType: unresolvedDraft.assetType,
+          symbol: symbol || undefined,
+          ticker,
+          isin: unresolvedDraft.isin.trim().toUpperCase(),
+          currency: unresolvedDraft.currency.trim().toUpperCase(),
+          quantity: 1,
+          providerSymbol: symbol || undefined,
+        }),
+      });
+
+      await load();
+      setErrorMessage(null);
+
+      if (importCsvText && importFile) {
+        const refreshed = await apiRequest<DegiroAccountStatementAnalyzeResult>(
+          '/finances/import/degiro-account-statement/analyze',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              accountId: importAccountId,
+              fileName: importFile.name,
+              csvText: importCsvText,
+            }),
+          },
+        );
+        setAnalyzeResult(refreshed);
+        setUnresolvedDraft(
+          refreshed.unresolvedAssets[0]
+            ? unresolvedToDraft(refreshed.unresolvedAssets[0])
+            : null,
+        );
+      }
+    } catch (error) {
+      setErrorMessage(getApiErrorMessage(error));
+    } finally {
+      setIsCreatingMissingAsset(false);
+    }
+  };
+
+  const commitImport = async () => {
+    if (!importAccountId || !importFile || !importCsvText) {
+      setErrorMessage('Run analyze first before importing.');
+      return;
+    }
+
+    if ((analyzeResult?.unresolvedAssets.length ?? 0) > 0) {
+      setErrorMessage('Create all unresolved assets before committing import.');
+      return;
+    }
+
+    setIsImporting(true);
+    try {
+      const result = await apiRequest<DegiroAccountStatementImportResult>(
+        '/finances/import/degiro-account-statement',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            accountId: importAccountId,
+            fileName: importFile.name,
+            csvText: importCsvText,
             dryRun: importDryRun,
           }),
         },
       );
       setImportResult(result);
       setErrorMessage(null);
-      if (!importDryRun && result.importedRows > 0) {
-        await Promise.all([load(), loadTaxSummary()]);
-      }
+      await Promise.all([load(), loadTaxSummary()]);
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
     } finally {
@@ -320,19 +456,29 @@ export function TransactionsFeature() {
 
   const totalBuys = useMemo(() => {
     return rows
-      .filter((row) => row.transactionType === 'buy')
+      .filter(
+        (row) =>
+          row.rowKind === 'asset_transaction' && row.transactionType === 'buy',
+      )
       .reduce((sum, row) => sum + Math.abs(row.cashImpactEur), 0);
   }, [rows]);
 
   const totalSells = useMemo(() => {
     return rows
-      .filter((row) => row.transactionType === 'sell')
+      .filter(
+        (row) =>
+          row.rowKind === 'asset_transaction' && row.transactionType === 'sell',
+      )
       .reduce((sum, row) => sum + row.cashImpactEur, 0);
   }, [rows]);
 
   const totalFees = useMemo(() => {
     return rows
-      .filter((row) => row.transactionType === 'fee')
+      .filter(
+        (row) =>
+          (row.rowKind === 'asset_transaction' && row.transactionType === 'fee') ||
+          row.movementType === 'connectivity_fee',
+      )
       .reduce((sum, row) => sum + Math.abs(row.cashImpactEur), 0);
   }, [rows]);
 
@@ -344,18 +490,13 @@ export function TransactionsFeature() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">
-            Transactions
-          </h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Transactions</h1>
           <p className="text-sm text-muted-foreground">
-            Register buy, sell, and dividend operations by account.
+            Register operations and import DEGIRO account statements.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button
-            variant="secondary"
-            onClick={() => setIsImportModalOpen(true)}
-          >
+          <Button variant="secondary" onClick={() => setIsImportModalOpen(true)}>
             Import CSV
           </Button>
           <Button variant="primary" onClick={() => setIsCreateModalOpen(true)}>
@@ -370,7 +511,7 @@ export function TransactionsFeature() {
         <KpiCard label="Buy Outflows" value={formatMoney(totalBuys)} />
         <KpiCard label="Sell Inflows" value={formatMoney(totalSells)} />
         <KpiCard label="Fee Outflows" value={formatMoney(totalFees)} />
-        <KpiCard label="Transactions" value={String(rows.length)} />
+        <KpiCard label="Rows" value={String(rows.length)} />
       </section>
 
       <Card title="Year-End Tax Summary">
@@ -394,8 +535,7 @@ export function TransactionsFeature() {
               <>
                 <p>Year: {taxSummary.year}</p>
                 <p>
-                  Realized Gain/Loss:{' '}
-                  {formatMoney(taxSummary.realizedGainLossEur)}
+                  Realized Gain/Loss: {formatMoney(taxSummary.realizedGainLossEur)}
                 </p>
               </>
             ) : (
@@ -413,7 +553,7 @@ export function TransactionsFeature() {
         </div>
       </Card>
 
-      <Card title="Asset Transactions Table">
+      <Card title="Transactions Timeline">
         {isLoading ? (
           <LoadingSkeleton lines={8} />
         ) : rows.length === 0 ? (
@@ -422,87 +562,59 @@ export function TransactionsFeature() {
           <DataTable
             columns={[
               {
-                key: 'tradedAt',
+                key: 'occurredAt',
                 header: 'Date',
-                render: (row: AssetTransaction) => formatDateTime(row.tradedAt),
+                render: (row: UnifiedTransactionRow) => formatDateTime(row.occurredAt),
+              },
+              {
+                key: 'kind',
+                header: 'Kind',
+                render: (row: UnifiedTransactionRow) => row.rowKind,
               },
               {
                 key: 'type',
                 header: 'Type',
-                render: (row: AssetTransaction) => row.transactionType,
+                render: (row: UnifiedTransactionRow) => prettyTxType(row),
               },
               {
                 key: 'asset',
+                header: 'Asset',
+                render: (row: UnifiedTransactionRow) => row.assetLabel ?? '-',
+              },
+              {
+                key: 'assetType',
                 header: 'Asset Type',
-                render: (row: AssetTransaction) =>
+                render: (row: UnifiedTransactionRow) =>
                   prettyAssetType(row.assetType),
               },
               {
-                key: 'qty',
-                header: 'Qty',
-                render: (row: AssetTransaction) => row.quantity.toString(),
-              },
-              {
-                key: 'price',
-                header: 'Unit Price',
-                render: (row: AssetTransaction) =>
-                  `${row.unitPrice.toFixed(4)} ${row.tradeCurrency}`,
+                key: 'native',
+                header: 'Amount',
+                render: (row: UnifiedTransactionRow) =>
+                  formatAmountWithCurrency(row.amountNative, row.currency),
               },
               {
                 key: 'cash',
                 header: 'Cash Impact EUR',
-                render: (row: AssetTransaction) =>
-                  formatMoney(row.cashImpactEur),
-              },
-              {
-                key: 'dividendGross',
-                header: 'Gross Dividend',
-                render: (row: AssetTransaction) =>
-                  row.transactionType === 'dividend'
-                    ? formatAmountWithCurrency(
-                        row.dividendGross,
-                        row.tradeCurrency,
-                      )
-                    : '-',
-              },
-              {
-                key: 'withholdingTax',
-                header: 'Retention',
-                render: (row: AssetTransaction) =>
-                  row.transactionType === 'dividend'
-                    ? formatAmountWithCurrency(
-                        row.withholdingTax,
-                        row.tradeCurrency,
-                      )
-                    : '-',
-              },
-              {
-                key: 'dividendNet',
-                header: 'Net Dividend',
-                render: (row: AssetTransaction) =>
-                  row.transactionType === 'dividend'
-                    ? formatAmountWithCurrency(
-                        row.dividendNet,
-                        row.tradeCurrency,
-                      )
-                    : '-',
+                render: (row: UnifiedTransactionRow) => formatMoney(row.cashImpactEur),
               },
               {
                 key: 'actions',
                 header: 'Actions',
-                render: (row: AssetTransaction) => (
-                  <Button
-                    type="button"
-                    variant="danger"
-                    size="sm"
-                    disabled={deletingTransactionId === row.id}
-                    onClick={() => void deleteTransaction(row)}
-                  >
-                    {deletingTransactionId === row.id
-                      ? 'Deleting...'
-                      : 'Delete'}
-                  </Button>
-                ),
+                render: (row: UnifiedTransactionRow) =>
+                  row.rowKind === 'asset_transaction' ? (
+                    <Button
+                      type="button"
+                      variant="danger"
+                      size="sm"
+                      disabled={deletingTransactionId === row.id}
+                      onClick={() => void deleteTransaction(row)}
+                    >
+                      {deletingTransactionId === row.id ? 'Deleting...' : 'Delete'}
+                    </Button>
+                  ) : (
+                    '-'
+                  ),
               },
             ]}
             rows={rows}
@@ -522,10 +634,7 @@ export function TransactionsFeature() {
       >
         <form className="grid gap-4" onSubmit={createTransaction}>
           <div className="grid gap-1.5">
-            <label
-              className="text-sm font-medium"
-              htmlFor="transaction-account"
-            >
+            <label className="text-sm font-medium" htmlFor="transaction-account">
               Account
             </label>
             <select
@@ -552,7 +661,7 @@ export function TransactionsFeature() {
           <div className="grid gap-1.5 sm:grid-cols-2 sm:gap-4">
             <div className="grid gap-1.5">
               <label className="text-sm font-medium" htmlFor="transaction-type">
-                Buy / Sell
+                Transaction Type
               </label>
               <select
                 id="transaction-type"
@@ -571,16 +680,15 @@ export function TransactionsFeature() {
                       ? 'Buy'
                       : type === 'sell'
                         ? 'Sell'
-                        : 'Dividend'}
+                        : type === 'fee'
+                          ? 'Fee'
+                          : 'Dividend'}
                   </option>
                 ))}
               </select>
             </div>
             <div className="grid gap-1.5">
-              <label
-                className="text-sm font-medium"
-                htmlFor="transaction-asset-type"
-              >
+              <label className="text-sm font-medium" htmlFor="transaction-asset-type">
                 Type of Asset
               </label>
               <select
@@ -630,10 +738,7 @@ export function TransactionsFeature() {
           </div>
 
           <div className="grid gap-1.5">
-            <label
-              className="text-sm font-medium"
-              htmlFor="transaction-traded-at"
-            >
+            <label className="text-sm font-medium" htmlFor="transaction-traded-at">
               Date / Time
             </label>
             <input
@@ -651,13 +756,10 @@ export function TransactionsFeature() {
             />
           </div>
 
-          {form.transactionType !== 'dividend' ? (
+          {form.transactionType === 'buy' || form.transactionType === 'sell' ? (
             <div className="grid gap-1.5 sm:grid-cols-2 sm:gap-4">
               <div className="grid gap-1.5">
-                <label
-                  className="text-sm font-medium"
-                  htmlFor="transaction-quantity"
-                >
+                <label className="text-sm font-medium" htmlFor="transaction-quantity">
                   Quantity
                 </label>
                 <input
@@ -673,10 +775,7 @@ export function TransactionsFeature() {
                 />
               </div>
               <div className="grid gap-1.5">
-                <label
-                  className="text-sm font-medium"
-                  htmlFor="transaction-unit-price"
-                >
+                <label className="text-sm font-medium" htmlFor="transaction-unit-price">
                   Unit Price
                 </label>
                 <input
@@ -692,7 +791,9 @@ export function TransactionsFeature() {
                 />
               </div>
             </div>
-          ) : (
+          ) : null}
+
+          {form.transactionType === 'dividend' ? (
             <>
               <div className="grid gap-1.5 sm:grid-cols-2 sm:gap-4">
                 <div className="grid gap-1.5">
@@ -741,14 +842,11 @@ export function TransactionsFeature() {
                   : formatMoney(withholdingPreview)}
               </p>
             </>
-          )}
+          ) : null}
 
           <div className="grid gap-1.5 sm:grid-cols-2 sm:gap-4">
             <div className="grid gap-1.5">
-              <label
-                className="text-sm font-medium"
-                htmlFor="transaction-currency"
-              >
+              <label className="text-sm font-medium" htmlFor="transaction-currency">
                 Currency
               </label>
               <select
@@ -770,10 +868,7 @@ export function TransactionsFeature() {
               </select>
             </div>
             <div className="grid gap-1.5">
-              <label
-                className="text-sm font-medium"
-                htmlFor="transaction-fx-rate"
-              >
+              <label className="text-sm font-medium" htmlFor="transaction-fx-rate">
                 FX Rate (to EUR)
               </label>
               <input
@@ -847,14 +942,14 @@ export function TransactionsFeature() {
 
       <Modal
         open={isImportModalOpen}
-        title="Import DEGIRO Transactions CSV"
+        title="Import DEGIRO Account Statement CSV"
         onClose={() => {
-          if (!isImporting) {
+          if (!isImporting && !isAnalyzingImport && !isCreatingMissingAsset) {
             setIsImportModalOpen(false);
           }
         }}
       >
-        <form className="grid gap-4" onSubmit={importDegiroCsv}>
+        <form className="grid gap-4" onSubmit={runAnalyze}>
           <div className="grid gap-1.5">
             <label className="text-sm font-medium" htmlFor="import-account">
               Account
@@ -889,34 +984,199 @@ export function TransactionsFeature() {
             />
           </div>
 
-          <label className="inline-flex items-center gap-2 text-sm text-muted-foreground">
-            <input
-              type="checkbox"
-              checked={importDryRun}
-              onChange={(event) => setImportDryRun(event.target.checked)}
-            />
-            Dry run (validate without inserting transactions)
-          </label>
-
           <Button
             type="submit"
-            variant="primary"
-            disabled={isImporting}
+            variant="secondary"
+            disabled={isAnalyzingImport}
             fullWidth
           >
-            {isImporting
-              ? 'Importing...'
-              : importDryRun
-                ? 'Run Dry Import'
-                : 'Import to DB'}
+            {isAnalyzingImport ? 'Analyzing...' : 'Analyze CSV'}
           </Button>
         </form>
+
+        {analyzeResult ? (
+          <div className="mt-4 space-y-4">
+            <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
+              <span className="rounded-full border border-border/70 bg-muted px-2.5 py-1">
+                Ready: {analyzeResult.totals.readyRows}
+              </span>
+              <span className="rounded-full border border-border/70 bg-muted px-2.5 py-1">
+                Unresolved: {analyzeResult.totals.unresolvedRows}
+              </span>
+              <span className="rounded-full border border-border/70 bg-muted px-2.5 py-1">
+                Failed: {analyzeResult.totals.failedRows}
+              </span>
+              <span className="rounded-full border border-border/70 bg-muted px-2.5 py-1">
+                Delta EUR: {formatMoney(analyzeResult.totals.deltaEur)}
+              </span>
+            </div>
+
+            {analyzeResult.unresolvedAssets.length > 0 ? (
+              <Card title="Unresolved Assets">
+                <div className="space-y-3">
+                  <p className="text-xs text-muted-foreground">
+                    Create missing assets before committing import.
+                  </p>
+                  <div className="space-y-1 text-xs text-muted-foreground">
+                    {analyzeResult.unresolvedAssets.map((asset) => (
+                      <button
+                        key={asset.isin}
+                        type="button"
+                        className="block rounded-md border border-border/70 px-2 py-1 text-left hover:bg-muted"
+                        onClick={() => setUnresolvedDraft(unresolvedToDraft(asset))}
+                      >
+                        {asset.isin} · {asset.name}
+                      </button>
+                    ))}
+                  </div>
+
+                  {unresolvedDraft ? (
+                    <form className="grid gap-2" onSubmit={createMissingAsset}>
+                      <div className="grid gap-1.5 sm:grid-cols-2 sm:gap-3">
+                        <div className="grid gap-1.5">
+                          <label className="text-xs font-medium">Name</label>
+                          <input
+                            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+                            value={unresolvedDraft.name}
+                            onChange={(event) =>
+                              setUnresolvedDraft((current) =>
+                                current
+                                  ? { ...current, name: event.target.value }
+                                  : current,
+                              )
+                            }
+                          />
+                        </div>
+                        <div className="grid gap-1.5">
+                          <label className="text-xs font-medium">ISIN</label>
+                          <input
+                            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+                            value={unresolvedDraft.isin}
+                            onChange={(event) =>
+                              setUnresolvedDraft((current) =>
+                                current
+                                  ? {
+                                      ...current,
+                                      isin: event.target.value.toUpperCase(),
+                                    }
+                                  : current,
+                              )
+                            }
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid gap-1.5 sm:grid-cols-3 sm:gap-3">
+                        <div className="grid gap-1.5">
+                          <label className="text-xs font-medium">Symbol</label>
+                          <input
+                            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+                            value={unresolvedDraft.symbol}
+                            onChange={(event) =>
+                              setUnresolvedDraft((current) =>
+                                current
+                                  ? {
+                                      ...current,
+                                      symbol: event.target.value.toUpperCase(),
+                                    }
+                                  : current,
+                              )
+                            }
+                          />
+                        </div>
+                        <div className="grid gap-1.5">
+                          <label className="text-xs font-medium">Currency</label>
+                          <input
+                            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+                            value={unresolvedDraft.currency}
+                            onChange={(event) =>
+                              setUnresolvedDraft((current) =>
+                                current
+                                  ? {
+                                      ...current,
+                                      currency: event.target.value.toUpperCase(),
+                                    }
+                                  : current,
+                              )
+                            }
+                          />
+                        </div>
+                        <div className="grid gap-1.5">
+                          <label className="text-xs font-medium">Type</label>
+                          <select
+                            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+                            value={unresolvedDraft.assetType}
+                            onChange={(event) =>
+                              setUnresolvedDraft((current) =>
+                                current
+                                  ? {
+                                      ...current,
+                                      assetType: event.target.value as AssetType,
+                                    }
+                                  : current,
+                              )
+                            }
+                          >
+                            {v1AssetTypes.map((type) => (
+                              <option key={type} value={type}>
+                                {prettyAssetType(type)}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      <Button
+                        type="submit"
+                        variant="secondary"
+                        disabled={isCreatingMissingAsset}
+                        fullWidth
+                      >
+                        {isCreatingMissingAsset
+                          ? 'Creating...'
+                          : 'Create Missing Asset'}
+                      </Button>
+                    </form>
+                  ) : null}
+                </div>
+              </Card>
+            ) : (
+              <label className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={importDryRun}
+                  onChange={(event) => setImportDryRun(event.target.checked)}
+                />
+                Dry run (validate and persist import report without inserts)
+              </label>
+            )}
+
+            <Button
+              type="button"
+              variant="primary"
+              disabled={
+                isImporting ||
+                analyzeResult.unresolvedAssets.length > 0 ||
+                !importCsvText
+              }
+              onClick={() => void commitImport()}
+              fullWidth
+            >
+              {isImporting
+                ? 'Importing...'
+                : importDryRun
+                  ? 'Run Dry Import'
+                  : 'Import to DB'}
+            </Button>
+          </div>
+        ) : null}
 
         {importResult ? (
           <div className="mt-4 space-y-3">
             <p className="text-xs text-muted-foreground">
-              Source: DEGIRO · {importResult.dryRun ? 'Dry run' : 'Committed'} ·
-              Rows {importResult.totalRows}
+              Source: DEGIRO Account Statement ·{' '}
+              {importResult.dryRun ? 'Dry run' : 'Committed'} · Rows{' '}
+              {importResult.totalRows}
             </p>
             <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
               <span className="rounded-full border border-border/70 bg-muted px-2.5 py-1">
@@ -928,6 +1188,12 @@ export function TransactionsFeature() {
               <span className="rounded-full border border-border/70 bg-muted px-2.5 py-1">
                 Failed: {importResult.failedRows}
               </span>
+              <span className="rounded-full border border-border/70 bg-muted px-2.5 py-1">
+                Linked Fees: {importResult.linkedFeeRows}
+              </span>
+              <span className="rounded-full border border-border/70 bg-muted px-2.5 py-1">
+                Delta EUR: {formatMoney(importResult.deltaEur)}
+              </span>
             </div>
             {failedImportRows.length > 0 ? (
               <div>
@@ -937,7 +1203,8 @@ export function TransactionsFeature() {
                 <ul className="list-disc space-y-0.5 pl-5 text-xs text-muted-foreground">
                   {failedImportRows.map((row) => (
                     <li key={`${row.rowNumber}-${row.reason ?? ''}`}>
-                      Row {row.rowNumber}: {row.reason ?? 'Unknown failure'}
+                      Row {row.rowNumber} ({row.rowType}):{' '}
+                      {row.reason ?? 'Unknown failure'}
                     </li>
                   ))}
                 </ul>

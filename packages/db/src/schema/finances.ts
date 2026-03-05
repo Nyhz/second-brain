@@ -1,6 +1,7 @@
 import {
   boolean,
   date,
+  foreignKey,
   index,
   integer,
   jsonb,
@@ -141,7 +142,10 @@ export const assetTransactions = financesSchema.table(
     dividendGross: numeric('dividend_gross', { precision: 18, scale: 6 }),
     withholdingTax: numeric('withholding_tax', { precision: 18, scale: 6 }),
     dividendNet: numeric('dividend_net', { precision: 18, scale: 6 }),
+    linkedTransactionId: uuid('linked_transaction_id'),
     externalReference: text('external_reference'),
+    rowFingerprint: varchar('row_fingerprint', { length: 64 }),
+    source: varchar('source', { length: 64 }).notNull().default('manual'),
     notes: text('notes'),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
@@ -166,9 +170,62 @@ export const assetTransactions = financesSchema.table(
       table.transactionType,
       table.tradedAt,
     ),
-    accountExternalRefUniqueIdx: uniqueIndex(
-      'asset_transactions_account_external_reference_uidx',
+    linkedTransactionFk: foreignKey({
+      columns: [table.linkedTransactionId],
+      foreignColumns: [table.id],
+      name: 'asset_transactions_linked_transaction_id_fkey',
+    }).onDelete('set null'),
+    accountExternalRefIdx: index(
+      'asset_transactions_account_external_reference_idx',
     ).on(table.accountId, table.externalReference),
+    accountSourceFingerprintUniqueIdx: uniqueIndex(
+      'asset_transactions_account_source_row_fingerprint_uidx',
+    ).on(table.accountId, table.source, table.rowFingerprint),
+  }),
+);
+
+export const accountCashMovements = financesSchema.table(
+  'account_cash_movements',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    movementType: varchar('movement_type', { length: 32 }).notNull(),
+    occurredAt: timestamp('occurred_at', { withTimezone: true }).notNull(),
+    valueDate: date('value_date'),
+    nativeAmount: numeric('native_amount', { precision: 18, scale: 6 })
+      .notNull()
+      .default('0'),
+    currency: varchar('currency', { length: 3 }).notNull(),
+    fxRateToEur: numeric('fx_rate_to_eur', { precision: 18, scale: 8 }),
+    cashImpactEur: numeric('cash_impact_eur', { precision: 18, scale: 2 })
+      .notNull()
+      .default('0'),
+    externalReference: text('external_reference'),
+    rowFingerprint: varchar('row_fingerprint', { length: 64 }),
+    source: varchar('source', { length: 64 }).notNull().default('manual'),
+    description: text('description'),
+    rawPayload: jsonb('raw_payload').$type<Record<string, unknown>>(),
+    affectsCashBalance: boolean('affects_cash_balance').notNull().default(true),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    accountOccurredIdx: index('account_cash_movements_account_occurred_idx').on(
+      table.accountId,
+      table.occurredAt,
+    ),
+    accountExternalRefIdx: index(
+      'account_cash_movements_account_external_reference_idx',
+    ).on(table.accountId, table.externalReference),
+    accountSourceFingerprintUniqueIdx: uniqueIndex(
+      'account_cash_movements_account_source_row_fingerprint_uidx',
+    ).on(table.accountId, table.source, table.rowFingerprint),
   }),
 );
 
@@ -215,6 +272,10 @@ export const transactionImportRows = financesSchema.table(
     errorCode: varchar('error_code', { length: 64 }),
     errorMessage: text('error_message'),
     externalReference: text('external_reference'),
+    rowFingerprint: varchar('row_fingerprint', { length: 64 }),
+    rowType: varchar('row_type', { length: 64 }),
+    movementTable: varchar('movement_table', { length: 32 }),
+    movementId: uuid('movement_id'),
     assetId: uuid('asset_id').references(() => assets.id, {
       onDelete: 'set null',
     }),
