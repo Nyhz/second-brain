@@ -388,7 +388,7 @@ export function AssetsFeature() {
                   <div>
                     <div className="font-medium">{row.name}</div>
                     <div className="text-xs text-muted-foreground">
-                      {row.id}
+                      {row.symbol ?? row.ticker ?? row.isin}
                     </div>
                   </div>
                 ),
@@ -426,7 +426,7 @@ export function AssetsFeature() {
                 render: (row: AssetWithPosition) =>
                   row.resolvedUnitPrice === null
                     ? '-'
-                    : `${row.resolvedUnitPrice.toFixed(4)} ${row.currency}`,
+                    : `${row.resolvedUnitPrice.toFixed(2)} ${row.currency}`,
               },
               {
                 key: 'value',

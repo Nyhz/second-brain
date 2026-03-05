@@ -1,5 +1,6 @@
 import {
   accounts,
+  accountCashMovements,
   and,
   assetPositions,
   assetTransactions,
@@ -16,13 +17,18 @@ import {
   type AssetPosition,
   type AssetTransaction,
   type AssetType,
+  type DegiroAccountStatementAnalyzeResult,
+  type DegiroAccountStatementImportResult,
   type CreateAssetTransactionInput,
   type DegiroImportResult,
   type FinancesOverviewResponse,
+  type UnifiedTransactionRow,
   type OverviewRange,
-  createAccountInputSchema,
   createAssetInputSchema,
   createAssetTransactionInputSchema,
+  degiroAccountStatementAnalyzeRequestSchema,
+  degiroAccountStatementImportRequestSchema,
+  createAccountInputSchema,
   degiroImportRequestSchema,
   overviewRangeSchema,
   updateAssetInputSchema,
@@ -36,6 +42,13 @@ import {
   getDegiroTicker,
   parseDegiroTransactionsCsv,
 } from './degiro-import';
+import {
+  type DegiroAccountStatementRow,
+  type DegiroAccountStatementRowType,
+  getDegiroStatementAssetType,
+  getDegiroStatementTicker,
+  parseDegiroAccountStatementCsv,
+} from './degiro-account-statement';
 
 const normalizeCurrency = (value: string) => value.trim().toUpperCase();
 
@@ -152,10 +165,20 @@ const serializeAssetTransaction = (
   dividendGross: toNullableNumber(row.dividendGross),
   withholdingTax: toNullableNumber(row.withholdingTax),
   dividendNet: toNullableNumber(row.dividendNet),
+  linkedTransactionId:
+    row.linkedTransactionId === null || row.linkedTransactionId === undefined
+      ? null
+      : String(row.linkedTransactionId),
   externalReference:
     row.externalReference === null || row.externalReference === undefined
       ? null
       : String(row.externalReference),
+  rowFingerprint:
+    row.rowFingerprint === null || row.rowFingerprint === undefined
+      ? null
+      : String(row.rowFingerprint),
+  source:
+    row.source === null || row.source === undefined ? null : String(row.source),
   notes:
     row.notes === null || row.notes === undefined ? null : String(row.notes),
   createdAt: toIso(row.createdAt),
@@ -165,12 +188,29 @@ const serializeAssetTransaction = (
 const round2 = (value: number) => Number(value.toFixed(2));
 const EURUSD_FX_SYMBOL = 'EURUSD=X';
 
-const OVERVIEW_RANGES: OverviewRange[] = ['1D', '1W', '1M', 'YTD', '1Y', 'MAX'];
+const OVERVIEW_RANGES: OverviewRange[] = ['1W', '1M', 'YTD', '1Y', 'MAX'];
 
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const round6 = (value: number) => Number(value.toFixed(6));
+const DEGIRO_ACCOUNT_STATEMENT_SOURCE = 'degiro_account_statement';
+const DEGIRO_TRANSACTIONS_SOURCE = 'degiro';
+
+type ImportMovementTable = 'asset_transaction' | 'cash_movement';
+
+type StatementImportRowResult = {
+  rowNumber: number;
+  rowType: string;
+  rowFingerprint: string | null;
+  status: 'imported' | 'skipped' | 'failed';
+  reason: string | null;
+  externalReference: string | null;
+  assetId: string | null;
+  transactionId: string | null;
+  movementTable: ImportMovementTable | null;
+  movementId: string | null;
+};
 
 const sha256Hex = async (value: string) => {
   const encoded = new TextEncoder().encode(value);
@@ -191,9 +231,7 @@ const clampRangeStart = (
   minTimestampMs: number | null,
 ) => {
   const start = new Date(now);
-  if (range === '1D') {
-    start.setUTCDate(start.getUTCDate() - 1);
-  } else if (range === '1W') {
+  if (range === '1W') {
     start.setUTCDate(start.getUTCDate() - 7);
   } else if (range === '1M') {
     start.setUTCMonth(start.getUTCMonth() - 1);
@@ -458,10 +496,27 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
           a.account_type as "accountType",
           a.created_at as "createdAt",
           a.updated_at as "updatedAt",
-          (a.opening_balance_eur + coalesce(sum(at.cash_impact_eur), 0))::numeric as "currentCashBalanceEur"
+          (
+            a.opening_balance_eur +
+            coalesce(at_sum.asset_cash_impact_eur, 0) +
+            coalesce(acm_sum.cash_movement_impact_eur, 0)
+          )::numeric as "currentCashBalanceEur"
         from finances.accounts a
-        left join finances.asset_transactions at on at.account_id = a.id
-        group by a.id
+        left join (
+          select
+            account_id,
+            coalesce(sum(cash_impact_eur), 0)::numeric as asset_cash_impact_eur
+          from finances.asset_transactions
+          group by account_id
+        ) at_sum on at_sum.account_id = a.id
+        left join (
+          select
+            account_id,
+            coalesce(sum(cash_impact_eur), 0)::numeric as cash_movement_impact_eur
+          from finances.account_cash_movements
+          where affects_cash_balance = true
+          group by account_id
+        ) acm_sum on acm_sum.account_id = a.id
         order by a.created_at desc
       `);
     });
@@ -484,11 +539,30 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       return db.execute(sql`
         select
           a.id,
-          (a.opening_balance_eur + coalesce(sum(at.cash_impact_eur), 0))::numeric as cash_balance
+          (
+            a.opening_balance_eur +
+            coalesce(at_sum.asset_cash_impact_eur, 0) +
+            coalesce(acm_sum.cash_movement_impact_eur, 0)
+          )::numeric as cash_balance
         from finances.accounts a
-        left join finances.asset_transactions at on at.account_id = a.id
+        left join (
+          select
+            account_id,
+            coalesce(sum(cash_impact_eur), 0)::numeric as asset_cash_impact_eur
+          from finances.asset_transactions
+          where account_id = ${accountId}
+          group by account_id
+        ) at_sum on at_sum.account_id = a.id
+        left join (
+          select
+            account_id,
+            coalesce(sum(cash_impact_eur), 0)::numeric as cash_movement_impact_eur
+          from finances.account_cash_movements
+          where account_id = ${accountId}
+            and affects_cash_balance = true
+          group by account_id
+        ) acm_sum on acm_sum.account_id = a.id
         where a.id = ${accountId}
-        group by a.id
       `);
     });
 
@@ -501,7 +575,13 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
 
   const createAssetTransactionRecord = async (
     input: CreateAssetTransactionInput,
-    options?: { cashImpactEurOverride?: number },
+    options?: {
+      cashImpactEurOverride?: number;
+      linkedTransactionId?: string | null;
+      rowFingerprint?: string | null;
+      source?: string | null;
+      skipCashBalanceValidation?: boolean;
+    },
   ) => {
     const tradeCurrency = normalizeCurrency(input.tradeCurrency);
     const feesCurrency = normalizeCurrency(
@@ -600,20 +680,22 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       }
     }
 
-    const currentCash = await getAccountCashBalance(input.accountId);
-    if (currentCash === null) {
-      throw new ApiHttpError(
-        404,
-        'ACCOUNT_NOT_FOUND',
-        'Account does not exist',
-      );
-    }
-    if (currentCash + cashImpactEur < 0) {
-      throw new ApiHttpError(
-        400,
-        'INSUFFICIENT_CASH',
-        'Transaction would make account cash balance negative',
-      );
+    if (!options?.skipCashBalanceValidation) {
+      const currentCash = await getAccountCashBalance(input.accountId);
+      if (currentCash === null) {
+        throw new ApiHttpError(
+          404,
+          'ACCOUNT_NOT_FOUND',
+          'Account does not exist',
+        );
+      }
+      if (currentCash + cashImpactEur < 0) {
+        throw new ApiHttpError(
+          400,
+          'INSUFFICIENT_CASH',
+          'Transaction would make account cash balance negative',
+        );
+      }
     }
 
     const rows = await withTimedDb('create_asset_transaction', async () => {
@@ -646,7 +728,10 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
             input.dividendNet === undefined || input.dividendNet === null
               ? null
               : input.dividendNet.toString(),
+          linkedTransactionId: options?.linkedTransactionId ?? null,
           externalReference: input.externalReference ?? null,
+          rowFingerprint: options?.rowFingerprint ?? null,
+          source: options?.source ?? 'manual',
           notes: input.notes ?? null,
         })
         .returning();
@@ -665,6 +750,263 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       ...(rows[0] as Record<string, unknown>),
       assetType: input.assetType,
     });
+  };
+
+  const statementAssetRowTypes = new Set<DegiroAccountStatementRowType>([
+    'buy',
+    'sell',
+    'trade_fee',
+    'asset_fee',
+    'dividend_gross',
+    'dividend_withholding',
+  ]);
+
+  const statementAffectsCash = (rowType: DegiroAccountStatementRowType) => {
+    if (
+      rowType === 'cash_sweep_internal' ||
+      rowType === 'fx_internal_credit' ||
+      rowType === 'fx_internal_debit'
+    ) {
+      return false;
+    }
+    if (rowType === 'informational') {
+      return false;
+    }
+    return true;
+  };
+
+  const statementCashMovementType = (rowType: DegiroAccountStatementRowType) => {
+    if (rowType === 'deposit') return 'deposit';
+    if (rowType === 'connectivity_fee') return 'connectivity_fee';
+    if (rowType === 'interest') return 'interest';
+    if (rowType === 'generic_credit') return 'credit';
+    if (rowType === 'fx_internal_credit') return 'fx_internal_credit';
+    if (rowType === 'fx_internal_debit') return 'fx_internal_debit';
+    if (rowType === 'cash_sweep_internal') return 'cash_sweep_internal';
+    return 'other';
+  };
+
+  const buildOrderFxRateResolver = (rows: DegiroAccountStatementRow[]) => {
+    const byOrder = new Map<string, DegiroAccountStatementRow[]>();
+    for (const row of rows) {
+      if (!row.orderId) continue;
+      const list = byOrder.get(row.orderId) ?? [];
+      list.push(row);
+      byOrder.set(row.orderId, list);
+    }
+
+    const cache = new Map<string, number | null>();
+    const fxRows = rows.filter(
+      (candidate) =>
+        (candidate.rowType === 'fx_internal_credit' ||
+          candidate.rowType === 'fx_internal_debit') &&
+        candidate.fxRaw !== null &&
+        candidate.fxRaw > 0 &&
+        candidate.occurredAtIso !== null,
+    );
+
+    const resolve = (
+      row: DegiroAccountStatementRow,
+      currency: string,
+    ): number | null => {
+      const normalizedCurrency = normalizeCurrency(currency);
+      if (normalizedCurrency === 'EUR') {
+        return null;
+      }
+      const cacheKey = `${row.orderId ?? 'none'}:${normalizedCurrency}`;
+      if (cache.has(cacheKey)) {
+        return cache.get(cacheKey) ?? null;
+      }
+
+      const orderRows = row.orderId ? byOrder.get(row.orderId) ?? [] : [];
+      const eurRow = orderRows.find(
+        (candidate) =>
+          normalizeCurrency(candidate.changeCurrency ?? '') === 'EUR' &&
+          candidate.changeAmount !== null &&
+          candidate.changeAmount !== 0,
+      );
+      const nativeRow = orderRows.find(
+        (candidate) =>
+          normalizeCurrency(candidate.changeCurrency ?? '') ===
+            normalizedCurrency &&
+          candidate.changeAmount !== null &&
+          candidate.changeAmount !== 0,
+      );
+      if (eurRow && nativeRow) {
+        const rate = Math.abs(eurRow.changeAmount! / nativeRow.changeAmount!);
+        cache.set(cacheKey, rate);
+        return rate;
+      }
+
+      const fxRow = orderRows.find(
+        (candidate) => candidate.fxRaw !== null && candidate.fxRaw > 0,
+      );
+      if (fxRow?.fxRaw && fxRow.fxRaw > 0) {
+        const rate = 1 / fxRow.fxRaw;
+        cache.set(cacheKey, rate);
+        return rate;
+      }
+
+      if (row.fxRaw && row.fxRaw > 0) {
+        const rate = 1 / row.fxRaw;
+        cache.set(cacheKey, rate);
+        return rate;
+      }
+
+      if (row.occurredAtIso) {
+        const targetTs = new Date(row.occurredAtIso).getTime();
+        const targetAbsAmount = Math.abs(row.changeAmount ?? 0);
+        const normalizedCandidates = fxRows.filter(
+          (candidate) =>
+            normalizeCurrency(candidate.changeCurrency ?? '') ===
+            normalizedCurrency,
+        );
+        normalizedCandidates.sort((a, b) => {
+          const aTs = a.occurredAtIso
+            ? new Date(a.occurredAtIso).getTime()
+            : Number.MAX_SAFE_INTEGER;
+          const bTs = b.occurredAtIso
+            ? new Date(b.occurredAtIso).getTime()
+            : Number.MAX_SAFE_INTEGER;
+          const aAmountGap =
+            targetAbsAmount > 0
+              ? Math.abs(Math.abs(a.changeAmount ?? 0) - targetAbsAmount)
+              : 0;
+          const bAmountGap =
+            targetAbsAmount > 0
+              ? Math.abs(Math.abs(b.changeAmount ?? 0) - targetAbsAmount)
+              : 0;
+          if (aAmountGap !== bAmountGap) {
+            return aAmountGap - bAmountGap;
+          }
+          return Math.abs(aTs - targetTs) - Math.abs(bTs - targetTs);
+        });
+        const nearest = normalizedCandidates[0];
+        if (nearest?.fxRaw && nearest.fxRaw > 0) {
+          const rate = 1 / nearest.fxRaw;
+          cache.set(cacheKey, rate);
+          return rate;
+        }
+      }
+
+      cache.set(cacheKey, null);
+      return null;
+    };
+
+    return resolve;
+  };
+
+  const convertStatementAmountToEur = (
+    amount: number,
+    currency: string | null,
+    fxRateToEur: number | null,
+  ) => {
+    const normalizedCurrency = normalizeCurrency(currency ?? 'EUR');
+    if (normalizedCurrency === 'EUR') {
+      return amount;
+    }
+    if (!fxRateToEur || fxRateToEur <= 0) {
+      return null;
+    }
+    return amount * fxRateToEur;
+  };
+
+  const loadAssetsByIsin = async (isins: string[]) => {
+    if (isins.length === 0) {
+      return new Map<string, { id: string; assetType: AssetType; name: string }>();
+    }
+    const rows = await withTimedDb('degiro_statement_assets_by_isin', async () =>
+      db.execute(sql`
+        select id, isin, asset_type as "assetType", name
+        from finances.assets
+        where isin in (${sql.join(
+          isins.map((isin) => sql`${isin}`),
+          sql`, `,
+        )})
+      `),
+    );
+    return new Map(
+      rows.map((row) => [
+        String(row.isin),
+        {
+          id: String(row.id),
+          assetType: String(row.assetType) as AssetType,
+          name: String(row.name),
+        },
+      ]),
+    );
+  };
+
+  const loadExistingStatementFingerprints = async (accountId: string) => {
+    const rows = await withTimedDb(
+      'degiro_statement_existing_fingerprints',
+      async () =>
+        db.execute(sql`
+          select row_fingerprint as "rowFingerprint"
+          from finances.asset_transactions
+          where account_id = ${accountId}
+            and source = ${DEGIRO_ACCOUNT_STATEMENT_SOURCE}
+            and row_fingerprint is not null
+          union
+          select row_fingerprint as "rowFingerprint"
+          from finances.account_cash_movements
+          where account_id = ${accountId}
+            and source = ${DEGIRO_ACCOUNT_STATEMENT_SOURCE}
+            and row_fingerprint is not null
+        `),
+    );
+    return new Set(rows.map((row) => String(row.rowFingerprint)));
+  };
+
+  const createAccountCashMovementRecord = async (input: {
+    accountId: string;
+    movementType: string;
+    occurredAt: string;
+    valueDate: string | null;
+    nativeAmount: number;
+    currency: string;
+    fxRateToEur: number | null;
+    cashImpactEur: number;
+    externalReference?: string | null;
+    rowFingerprint?: string | null;
+    source?: string;
+    description?: string | null;
+    rawPayload?: Record<string, unknown>;
+    affectsCashBalance: boolean;
+  }) => {
+    const [created] = await withTimedDb('create_account_cash_movement', async () =>
+      db
+        .insert(accountCashMovements)
+        .values({
+          accountId: input.accountId,
+          movementType: input.movementType,
+          occurredAt: new Date(input.occurredAt),
+          valueDate: input.valueDate ?? null,
+          nativeAmount: input.nativeAmount.toString(),
+          currency: normalizeCurrency(input.currency),
+          fxRateToEur:
+            input.fxRateToEur === null || input.fxRateToEur === undefined
+              ? null
+              : input.fxRateToEur.toString(),
+          cashImpactEur: round2(input.cashImpactEur).toString(),
+          externalReference: input.externalReference ?? null,
+          rowFingerprint: input.rowFingerprint ?? null,
+          source: input.source ?? 'manual',
+          description: input.description ?? null,
+          rawPayload: input.rawPayload ?? null,
+          affectsCashBalance: input.affectsCashBalance,
+        })
+        .returning({ id: accountCashMovements.id }),
+    );
+
+    if (!created?.id) {
+      throw new ApiHttpError(
+        500,
+        'INTERNAL_ERROR',
+        'Failed to create account cash movement',
+      );
+    }
+    return String(created.id);
   };
 
   app.get('/finances/accounts', async () => {
@@ -762,6 +1104,145 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     return rows.map((row) => serializeAssetTransaction(row));
   });
 
+  app.get('/finances/transactions', async ({ query }) => {
+    const accountId = query.accountId as string | undefined;
+    const whereSql =
+      accountId && UUID_RE.test(accountId)
+        ? sql`where account_id = ${accountId}`
+        : sql``;
+
+    const rows = await withTimedDb('list_unified_transactions', async () => {
+      return db.execute(sql`
+        with asset_rows as (
+          select
+            at.id,
+            'asset_transaction'::text as "rowKind",
+            at.account_id as "accountId",
+            at.traded_at as "occurredAt",
+            null::date as "valueDate",
+            at.transaction_type as "transactionType",
+            null::text as "movementType",
+            at.asset_id as "assetId",
+            a.asset_type as "assetType",
+            (coalesce(a.symbol, a.ticker) || ' · ' || a.name)::text as "assetLabel",
+            at.quantity as quantity,
+            at.unit_price as "unitPrice",
+            case
+              when at.transaction_type = 'buy' then -(at.quantity * at.unit_price)
+              when at.transaction_type = 'sell' then (at.quantity * at.unit_price)
+              when at.transaction_type = 'dividend' then coalesce(at.dividend_net, 0)
+              when at.transaction_type = 'fee' then -abs(coalesce(at.fees_amount, 0))
+              else 0
+            end::numeric as "amountNative",
+            at.trade_currency as currency,
+            at.fx_rate_to_eur as "fxRateToEur",
+            at.cash_impact_eur as "cashImpactEur",
+            at.linked_transaction_id as "linkedTransactionId",
+            at.notes,
+            at.external_reference as "externalReference",
+            at.source
+          from finances.asset_transactions at
+          inner join finances.assets a on a.id = at.asset_id
+          ${whereSql}
+        ),
+        cash_rows as (
+          select
+            acm.id,
+            'cash_movement'::text as "rowKind",
+            acm.account_id as "accountId",
+            acm.occurred_at as "occurredAt",
+            acm.value_date as "valueDate",
+            null::text as "transactionType",
+            acm.movement_type as "movementType",
+            null::uuid as "assetId",
+            null::text as "assetType",
+            acm.description as "assetLabel",
+            null::numeric as quantity,
+            null::numeric as "unitPrice",
+            acm.native_amount as "amountNative",
+            acm.currency,
+            acm.fx_rate_to_eur as "fxRateToEur",
+            acm.cash_impact_eur as "cashImpactEur",
+            null::uuid as "linkedTransactionId",
+            acm.description as notes,
+            acm.external_reference as "externalReference",
+            acm.source
+          from finances.account_cash_movements acm
+          ${whereSql}
+        )
+        select *
+        from asset_rows
+        union all
+        select *
+        from cash_rows
+        order by "occurredAt" desc, id desc
+      `);
+    });
+
+    return rows.map(
+      (row): UnifiedTransactionRow => ({
+        id: String(row.id),
+        rowKind: String(row.rowKind) as UnifiedTransactionRow['rowKind'],
+        accountId: String(row.accountId),
+        occurredAt: toIso(row.occurredAt),
+        valueDate:
+          row.valueDate === null || row.valueDate === undefined
+            ? null
+            : String(row.valueDate),
+        transactionType:
+          row.transactionType === null || row.transactionType === undefined
+            ? null
+            : (String(row.transactionType) as UnifiedTransactionRow['transactionType']),
+        movementType:
+          row.movementType === null || row.movementType === undefined
+            ? null
+            : String(row.movementType),
+        assetId:
+          row.assetId === null || row.assetId === undefined
+            ? null
+            : String(row.assetId),
+        assetType:
+          row.assetType === null || row.assetType === undefined
+            ? null
+            : (String(row.assetType) as UnifiedTransactionRow['assetType']),
+        assetLabel:
+          row.assetLabel === null || row.assetLabel === undefined
+            ? null
+            : String(row.assetLabel),
+        quantity:
+          row.quantity === null || row.quantity === undefined
+            ? null
+            : Number(row.quantity),
+        unitPrice:
+          row.unitPrice === null || row.unitPrice === undefined
+            ? null
+            : Number(row.unitPrice),
+        amountNative: Number(row.amountNative ?? 0),
+        currency: String(row.currency ?? 'EUR'),
+        fxRateToEur:
+          row.fxRateToEur === null || row.fxRateToEur === undefined
+            ? null
+            : Number(row.fxRateToEur),
+        cashImpactEur: Number(row.cashImpactEur ?? 0),
+        linkedTransactionId:
+          row.linkedTransactionId === null ||
+          row.linkedTransactionId === undefined
+            ? null
+            : String(row.linkedTransactionId),
+        notes:
+          row.notes === null || row.notes === undefined ? null : String(row.notes),
+        externalReference:
+          row.externalReference === null || row.externalReference === undefined
+            ? null
+            : String(row.externalReference),
+        source:
+          row.source === null || row.source === undefined
+            ? null
+            : String(row.source),
+      }),
+    );
+  });
+
   app.post('/finances/asset-transactions', async ({ body, set }) => {
     const parsed = createAssetTransactionInputSchema.safeParse(body);
     if (!parsed.success) {
@@ -841,7 +1322,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         return db
           .insert(transactionImports)
           .values({
-            source: 'degiro',
+            source: DEGIRO_TRANSACTIONS_SOURCE,
             accountId: parsed.data.accountId,
             filename: parsed.data.fileName,
             fileHash,
@@ -1091,6 +1572,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       try {
         const created = await createAssetTransactionRecord(validation.data, {
           cashImpactEurOverride: round2(parsedRow.normalized.totalEur),
+          source: DEGIRO_TRANSACTIONS_SOURCE,
         });
         importedRows += 1;
         results.push({
@@ -1157,7 +1639,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
 
     return {
       importId: String(importRun.id),
-      source: 'degiro',
+      source: DEGIRO_TRANSACTIONS_SOURCE,
       fileName: parsed.data.fileName,
       fileHash,
       dryRun: parsed.data.dryRun,
@@ -1168,6 +1650,1196 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       results,
     } satisfies DegiroImportResult;
   });
+
+  app.post(
+    '/finances/import/degiro-account-statement/analyze',
+    async ({ body }): Promise<DegiroAccountStatementAnalyzeResult> => {
+      const parsed = degiroAccountStatementAnalyzeRequestSchema.safeParse(body);
+      if (!parsed.success) {
+        throw new ApiHttpError(
+          400,
+          'VALIDATION_ERROR',
+          'Invalid DEGIRO Account Statement analyze payload',
+          parsed.error.format(),
+        );
+      }
+
+      const csvBytes = new TextEncoder().encode(parsed.data.csvText).byteLength;
+      if (csvBytes > 5 * 1024 * 1024) {
+        throw new ApiHttpError(
+          400,
+          'CSV_TOO_LARGE',
+          'CSV file is larger than 5MB limit.',
+        );
+      }
+
+      const [accountRow] = await withTimedDb(
+        'degiro_statement_analyze_account_exists',
+        async () =>
+          db
+            .select({ id: accounts.id })
+            .from(accounts)
+            .where(eq(accounts.id, parsed.data.accountId)),
+      );
+      if (!accountRow) {
+        throw new ApiHttpError(
+          404,
+          'ACCOUNT_NOT_FOUND',
+          'Account does not exist',
+        );
+      }
+
+      const fileHash = await sha256Hex(parsed.data.csvText);
+      const parsedCsv = await parseDegiroAccountStatementCsv(parsed.data.csvText);
+      const resolveOrderFxRate = buildOrderFxRateResolver(parsedCsv.rows);
+
+      const statementIsins = [
+        ...new Set(
+          parsedCsv.rows
+            .filter((row) => statementAssetRowTypes.has(row.rowType))
+            .map((row) => row.isin)
+            .filter((isin): isin is string => Boolean(isin)),
+        ),
+      ];
+      const assetByIsin = await loadAssetsByIsin(statementIsins);
+
+      const unresolvedByIsin = new Map<
+        string,
+        {
+          isin: string;
+          name: string;
+          symbolHint: string | null;
+          currencyHint: string;
+          typeHint: AssetType;
+        }
+      >();
+
+      const categoryBreakdown = new Map<string, number>();
+      const previewRows: DegiroAccountStatementAnalyzeResult['previewRows'] = [];
+      let readyRows = 0;
+      let unresolvedRows = 0;
+      let failedRows = 0;
+      let ignoredRows = 0;
+      let computedFinalCashEur = 0;
+
+      for (const row of parsedCsv.rows) {
+        categoryBreakdown.set(
+          row.rowType,
+          (categoryBreakdown.get(row.rowType) ?? 0) + 1,
+        );
+
+        let status: 'ready' | 'unresolved' | 'failed' | 'ignored' = 'ready';
+        let reason: string | null = null;
+
+        if (row.rowType === 'informational') {
+          status = 'ignored';
+          reason = 'Informational statement row.';
+        } else if (row.rowType === 'unknown') {
+          status = 'failed';
+          reason = 'Unsupported row type.';
+        } else if (!row.occurredAtIso) {
+          status = 'failed';
+          reason = 'Invalid Date/Time.';
+        } else if (
+          (row.rowType === 'buy' || row.rowType === 'sell') &&
+          (!row.trade || row.changeAmount === null)
+        ) {
+          status = 'failed';
+          reason = 'Trade row missing quantity, unit price, or amount.';
+        } else if (
+          (row.rowType === 'trade_fee' ||
+            row.rowType === 'asset_fee' ||
+            row.rowType === 'deposit' ||
+            row.rowType === 'connectivity_fee' ||
+            row.rowType === 'interest' ||
+            row.rowType === 'generic_credit' ||
+            row.rowType === 'fx_internal_credit' ||
+            row.rowType === 'fx_internal_debit' ||
+            row.rowType === 'cash_sweep_internal' ||
+            row.rowType === 'dividend_gross' ||
+            row.rowType === 'dividend_withholding') &&
+          row.changeAmount === null
+        ) {
+          status = 'failed';
+          reason = 'Row is missing monetary Change amount.';
+        } else if (statementAssetRowTypes.has(row.rowType)) {
+          if (!row.isin || row.isin.length !== 12) {
+            status = 'failed';
+            reason = 'Asset row missing valid ISIN.';
+          } else if (!assetByIsin.has(row.isin)) {
+            status = 'unresolved';
+            reason = 'Asset with ISIN not found.';
+            if (!unresolvedByIsin.has(row.isin)) {
+              unresolvedByIsin.set(row.isin, {
+                isin: row.isin,
+                name: row.product || row.description,
+                symbolHint: getDegiroStatementTicker(row.product, row.isin),
+                currencyHint: normalizeCurrency(row.changeCurrency ?? 'EUR'),
+                typeHint: getDegiroStatementAssetType(row.product),
+              });
+            }
+          }
+        }
+
+        if (status === 'ready') {
+          readyRows += 1;
+        } else if (status === 'unresolved') {
+          unresolvedRows += 1;
+        } else if (status === 'failed') {
+          failedRows += 1;
+        } else {
+          ignoredRows += 1;
+        }
+
+        if (
+          status === 'ready' &&
+          statementAffectsCash(row.rowType) &&
+          row.changeAmount !== null
+        ) {
+          const fxRate = resolveOrderFxRate(
+            row,
+            normalizeCurrency(row.changeCurrency ?? 'EUR'),
+          );
+          const eurAmount = convertStatementAmountToEur(
+            row.changeAmount,
+            row.changeCurrency ?? 'EUR',
+            fxRate,
+          );
+          if (eurAmount !== null) {
+            computedFinalCashEur += eurAmount;
+          }
+        }
+
+        previewRows.push({
+          rowNumber: row.rowNumber,
+          rowType: row.rowType,
+          status,
+          reason,
+          description: row.description || null,
+          externalReference: row.orderId,
+          rowFingerprint: row.rowFingerprint,
+        });
+      }
+
+      const expectedFinalCashEur =
+        parsedCsv.rows.find(
+          (row) =>
+            normalizeCurrency(row.balanceCurrency ?? '') === 'EUR' &&
+            row.balanceAmount !== null,
+        )?.balanceAmount ?? round2(computedFinalCashEur);
+
+      return {
+        source: DEGIRO_ACCOUNT_STATEMENT_SOURCE,
+        fileHash,
+        totals: {
+          totalRows: parsedCsv.rows.length,
+          readyRows,
+          unresolvedRows,
+          failedRows,
+          ignoredRows,
+          expectedFinalCashEur: round2(expectedFinalCashEur),
+          computedFinalCashEur: round2(computedFinalCashEur),
+          deltaEur: round2(expectedFinalCashEur - computedFinalCashEur),
+        },
+        categoryBreakdown: Object.fromEntries(categoryBreakdown.entries()),
+        unresolvedAssets: [...unresolvedByIsin.values()],
+        previewRows,
+        warnings: parsedCsv.warnings,
+        errors: [],
+      };
+    },
+  );
+
+  app.post(
+    '/finances/import/degiro-account-statement',
+    async ({ body }): Promise<DegiroAccountStatementImportResult> => {
+      const parsed = degiroAccountStatementImportRequestSchema.safeParse(body);
+      if (!parsed.success) {
+        throw new ApiHttpError(
+          400,
+          'VALIDATION_ERROR',
+          'Invalid DEGIRO Account Statement import payload',
+          parsed.error.format(),
+        );
+      }
+
+      const csvBytes = new TextEncoder().encode(parsed.data.csvText).byteLength;
+      if (csvBytes > 5 * 1024 * 1024) {
+        throw new ApiHttpError(
+          400,
+          'CSV_TOO_LARGE',
+          'CSV file is larger than 5MB limit.',
+        );
+      }
+
+      const [accountRow] = await withTimedDb(
+        'degiro_statement_import_account_exists',
+        async () =>
+          db
+            .select({ id: accounts.id })
+            .from(accounts)
+            .where(eq(accounts.id, parsed.data.accountId)),
+      );
+      if (!accountRow) {
+        throw new ApiHttpError(
+          404,
+          'ACCOUNT_NOT_FOUND',
+          'Account does not exist',
+        );
+      }
+
+      const fileHash = await sha256Hex(parsed.data.csvText);
+      const parsedCsv = await parseDegiroAccountStatementCsv(parsed.data.csvText);
+      const resolveOrderFxRate = buildOrderFxRateResolver(parsedCsv.rows);
+      const existingFingerprints = await loadExistingStatementFingerprints(
+        parsed.data.accountId,
+      );
+
+      const statementIsins = [
+        ...new Set(
+          parsedCsv.rows
+            .filter((row) => statementAssetRowTypes.has(row.rowType))
+            .map((row) => row.isin)
+            .filter((isin): isin is string => Boolean(isin)),
+        ),
+      ];
+      const assetByIsin = await loadAssetsByIsin(statementIsins);
+
+      const unresolvedAssets = [
+        ...new Set(
+          parsedCsv.rows
+            .filter((row) => statementAssetRowTypes.has(row.rowType))
+            .filter((row) => row.isin && !assetByIsin.has(row.isin))
+            .map((row) => row.isin as string),
+        ),
+      ];
+      if (unresolvedAssets.length > 0) {
+        throw new ApiHttpError(
+          400,
+          'UNRESOLVED_ASSETS',
+          'Some statement assets are missing. Run analyze and create unresolved assets first.',
+          { unresolvedIsins: unresolvedAssets },
+        );
+      }
+
+      const [importRun] = await withTimedDb(
+        'degiro_statement_create_import_run',
+        async () =>
+          db
+            .insert(transactionImports)
+            .values({
+              source: DEGIRO_ACCOUNT_STATEMENT_SOURCE,
+              accountId: parsed.data.accountId,
+              filename: parsed.data.fileName,
+              fileHash,
+              dryRun: parsed.data.dryRun,
+            })
+            .returning(),
+      );
+      if (!importRun) {
+        throw new ApiHttpError(
+          500,
+          'INTERNAL_ERROR',
+          'Failed to initialize import run',
+        );
+      }
+
+      const orderRowsById = new Map<string, DegiroAccountStatementRow[]>();
+      for (const row of parsedCsv.rows) {
+        if (!row.orderId) continue;
+        const list = orderRowsById.get(row.orderId) ?? [];
+        list.push(row);
+        orderRowsById.set(row.orderId, list);
+      }
+
+      const linkedTradeByOrder = new Map<string, string>();
+      const findLinkedTrade = async (orderId: string) => {
+        const cached = linkedTradeByOrder.get(orderId);
+        if (cached) {
+          return cached;
+        }
+        const [existing] = await withTimedDb('degiro_statement_linked_trade', async () =>
+          db.execute(sql`
+            select id
+            from finances.asset_transactions
+            where account_id = ${parsed.data.accountId}
+              and external_reference = ${orderId}
+              and transaction_type in ('buy', 'sell')
+            order by traded_at desc
+            limit 1
+          `),
+        );
+        if (!existing?.id) {
+          return null;
+        }
+        const value = String(existing.id);
+        linkedTradeByOrder.set(orderId, value);
+        return value;
+      };
+
+      const resultsByRow = new Map<number, StatementImportRowResult>();
+      let importedRows = 0;
+      let skippedRows = 0;
+      let failedRows = 0;
+      let linkedFeeRows = 0;
+      let createdCashMovements = 0;
+      let createdAssetTransactions = 0;
+      let appliedCashImpactEur = 0;
+
+      const setResult = (
+        row: DegiroAccountStatementRow,
+        value: Omit<StatementImportRowResult, 'rowNumber' | 'rowType'>,
+      ) => {
+        resultsByRow.set(row.rowNumber, {
+          rowNumber: row.rowNumber,
+          rowType: row.rowType,
+          ...value,
+        });
+      };
+
+      const sortedRows = [...parsedCsv.rows].sort((a, b) => {
+        const aTs = a.occurredAtIso ? new Date(a.occurredAtIso).getTime() : 0;
+        const bTs = b.occurredAtIso ? new Date(b.occurredAtIso).getTime() : 0;
+        if (aTs !== bTs) return aTs - bTs;
+        if (a.rowType === 'buy' || a.rowType === 'sell') return -1;
+        if (b.rowType === 'buy' || b.rowType === 'sell') return 1;
+        return a.rowNumber - b.rowNumber;
+      });
+
+      for (const row of sortedRows) {
+        if (row.rowType !== 'buy' && row.rowType !== 'sell') {
+          continue;
+        }
+        if (resultsByRow.has(row.rowNumber)) continue;
+
+        if (existingFingerprints.has(row.rowFingerprint)) {
+          skippedRows += 1;
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'skipped',
+            reason: 'Duplicate row fingerprint.',
+            externalReference: row.orderId,
+            assetId: null,
+            transactionId: null,
+            movementTable: null,
+            movementId: null,
+          });
+          continue;
+        }
+
+        const asset = row.isin ? assetByIsin.get(row.isin) : null;
+        if (!asset) {
+          failedRows += 1;
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'failed',
+            reason: 'Asset with ISIN not found.',
+            externalReference: row.orderId,
+            assetId: null,
+            transactionId: null,
+            movementTable: null,
+            movementId: null,
+          });
+          continue;
+        }
+        if (!row.occurredAtIso || !row.trade || row.changeAmount === null) {
+          failedRows += 1;
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'failed',
+            reason: 'Trade row is missing required fields.',
+            externalReference: row.orderId,
+            assetId: asset.id,
+            transactionId: null,
+            movementTable: null,
+            movementId: null,
+          });
+          continue;
+        }
+
+        const tradeCurrency = normalizeCurrency(
+          row.trade.tradeCurrency ?? row.changeCurrency ?? 'EUR',
+        );
+        const fxRateToEur = resolveOrderFxRate(row, tradeCurrency);
+        const cashImpactEur = convertStatementAmountToEur(
+          row.changeAmount,
+          row.changeCurrency ?? tradeCurrency,
+          resolveOrderFxRate(
+            row,
+            normalizeCurrency(row.changeCurrency ?? tradeCurrency),
+          ),
+        );
+        if (cashImpactEur === null) {
+          failedRows += 1;
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'failed',
+            reason: 'FX rate to EUR is missing for non-EUR trade.',
+            externalReference: row.orderId,
+            assetId: asset.id,
+            transactionId: null,
+            movementTable: null,
+            movementId: null,
+          });
+          continue;
+        }
+
+        const payload: CreateAssetTransactionInput = {
+          accountId: parsed.data.accountId,
+          assetId: asset.id,
+          assetType: asset.assetType,
+          transactionType: row.rowType,
+          tradedAt: row.occurredAtIso,
+          quantity: row.trade.quantity,
+          unitPrice: row.trade.unitPrice,
+          tradeCurrency,
+          fxRateToEur,
+          feesAmount: 0,
+          feesCurrency: 'EUR',
+          externalReference: row.orderId,
+          notes: `Imported from DEGIRO Account Statement (${parsed.data.fileName}).`,
+        };
+
+        const validation = createAssetTransactionInputSchema.safeParse(payload);
+        if (!validation.success) {
+          failedRows += 1;
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'failed',
+            reason: 'Trade row failed schema validation.',
+            externalReference: row.orderId,
+            assetId: asset.id,
+            transactionId: null,
+            movementTable: null,
+            movementId: null,
+          });
+          continue;
+        }
+
+        if (parsed.data.dryRun) {
+          skippedRows += 1;
+          appliedCashImpactEur += cashImpactEur;
+          existingFingerprints.add(row.rowFingerprint);
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'skipped',
+            reason: 'Dry run: row validated but not inserted.',
+            externalReference: row.orderId,
+            assetId: asset.id,
+            transactionId: null,
+            movementTable: 'asset_transaction',
+            movementId: null,
+          });
+          continue;
+        }
+
+        try {
+          const created = await createAssetTransactionRecord(validation.data, {
+            cashImpactEurOverride: cashImpactEur,
+            rowFingerprint: row.rowFingerprint,
+            source: DEGIRO_ACCOUNT_STATEMENT_SOURCE,
+            skipCashBalanceValidation: true,
+          });
+          importedRows += 1;
+          createdAssetTransactions += 1;
+          appliedCashImpactEur += cashImpactEur;
+          existingFingerprints.add(row.rowFingerprint);
+          if (row.orderId) {
+            linkedTradeByOrder.set(row.orderId, created.id);
+          }
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'imported',
+            reason: null,
+            externalReference: row.orderId,
+            assetId: asset.id,
+            transactionId: created.id,
+            movementTable: 'asset_transaction',
+            movementId: created.id,
+          });
+        } catch (error) {
+          failedRows += 1;
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'failed',
+            reason:
+              error instanceof Error
+                ? error.message
+                : 'Failed to import trade row.',
+            externalReference: row.orderId,
+            assetId: asset.id,
+            transactionId: null,
+            movementTable: null,
+            movementId: null,
+          });
+        }
+      }
+
+      for (const row of sortedRows) {
+        if (row.rowType !== 'trade_fee' && row.rowType !== 'asset_fee') {
+          continue;
+        }
+        if (resultsByRow.has(row.rowNumber)) continue;
+
+        if (existingFingerprints.has(row.rowFingerprint)) {
+          skippedRows += 1;
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'skipped',
+            reason: 'Duplicate row fingerprint.',
+            externalReference: row.orderId,
+            assetId: null,
+            transactionId: null,
+            movementTable: null,
+            movementId: null,
+          });
+          continue;
+        }
+
+        const asset = row.isin ? assetByIsin.get(row.isin) : null;
+        if (!asset) {
+          failedRows += 1;
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'failed',
+            reason: 'Fee row requires an existing asset ISIN.',
+            externalReference: row.orderId,
+            assetId: null,
+            transactionId: null,
+            movementTable: null,
+            movementId: null,
+          });
+          continue;
+        }
+        if (!row.occurredAtIso || row.changeAmount === null) {
+          failedRows += 1;
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'failed',
+            reason: 'Fee row is missing required fields.',
+            externalReference: row.orderId,
+            assetId: asset.id,
+            transactionId: null,
+            movementTable: null,
+            movementId: null,
+          });
+          continue;
+        }
+
+        const tradeCurrency = normalizeCurrency(row.changeCurrency ?? 'EUR');
+        const fxRateToEur = resolveOrderFxRate(row, tradeCurrency);
+        const cashImpactEur = convertStatementAmountToEur(
+          row.changeAmount,
+          row.changeCurrency ?? tradeCurrency,
+          resolveOrderFxRate(
+            row,
+            normalizeCurrency(row.changeCurrency ?? tradeCurrency),
+          ),
+        );
+        if (cashImpactEur === null) {
+          failedRows += 1;
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'failed',
+            reason: 'FX rate to EUR is missing for non-EUR fee.',
+            externalReference: row.orderId,
+            assetId: asset.id,
+            transactionId: null,
+            movementTable: null,
+            movementId: null,
+          });
+          continue;
+        }
+
+        const linkedTransactionId =
+          row.rowType === 'trade_fee' && row.orderId
+            ? ((linkedTradeByOrder.get(row.orderId) ??
+                (await findLinkedTrade(row.orderId))) as string | null)
+            : null;
+
+        const payload: CreateAssetTransactionInput = {
+          accountId: parsed.data.accountId,
+          assetId: asset.id,
+          assetType: asset.assetType,
+          transactionType: 'fee',
+          tradedAt: row.occurredAtIso,
+          quantity: 0,
+          unitPrice: 0,
+          tradeCurrency,
+          fxRateToEur,
+          feesAmount: Math.abs(row.changeAmount),
+          feesCurrency: tradeCurrency,
+          externalReference: row.orderId,
+          notes: `Imported from DEGIRO Account Statement (${parsed.data.fileName}).`,
+        };
+
+        const validation = createAssetTransactionInputSchema.safeParse(payload);
+        if (!validation.success) {
+          failedRows += 1;
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'failed',
+            reason: 'Fee row failed schema validation.',
+            externalReference: row.orderId,
+            assetId: asset.id,
+            transactionId: null,
+            movementTable: null,
+            movementId: null,
+          });
+          continue;
+        }
+
+        if (parsed.data.dryRun) {
+          skippedRows += 1;
+          appliedCashImpactEur += cashImpactEur;
+          existingFingerprints.add(row.rowFingerprint);
+          if (linkedTransactionId) {
+            linkedFeeRows += 1;
+          }
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'skipped',
+            reason: 'Dry run: row validated but not inserted.',
+            externalReference: row.orderId,
+            assetId: asset.id,
+            transactionId: null,
+            movementTable: 'asset_transaction',
+            movementId: null,
+          });
+          continue;
+        }
+
+        try {
+          const created = await createAssetTransactionRecord(validation.data, {
+            cashImpactEurOverride: cashImpactEur,
+            linkedTransactionId,
+            rowFingerprint: row.rowFingerprint,
+            source: DEGIRO_ACCOUNT_STATEMENT_SOURCE,
+            skipCashBalanceValidation: true,
+          });
+          importedRows += 1;
+          createdAssetTransactions += 1;
+          appliedCashImpactEur += cashImpactEur;
+          existingFingerprints.add(row.rowFingerprint);
+          if (linkedTransactionId) {
+            linkedFeeRows += 1;
+          }
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'imported',
+            reason: null,
+            externalReference: row.orderId,
+            assetId: asset.id,
+            transactionId: created.id,
+            movementTable: 'asset_transaction',
+            movementId: created.id,
+          });
+        } catch (error) {
+          failedRows += 1;
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'failed',
+            reason:
+              error instanceof Error ? error.message : 'Failed to import fee row.',
+            externalReference: row.orderId,
+            assetId: asset.id,
+            transactionId: null,
+            movementTable: null,
+            movementId: null,
+          });
+        }
+      }
+
+      const dividendRows = parsedCsv.rows.filter(
+        (row) =>
+          row.rowType === 'dividend_gross' ||
+          row.rowType === 'dividend_withholding',
+      );
+      const dividendGroupMap = new Map<string, DegiroAccountStatementRow[]>();
+      for (const row of dividendRows) {
+        const key = [
+          row.isin ?? 'unknown',
+          row.valueDate ?? row.date,
+          normalizeCurrency(row.changeCurrency ?? 'EUR'),
+          row.orderId ?? '',
+        ].join('|');
+        const list = dividendGroupMap.get(key) ?? [];
+        list.push(row);
+        dividendGroupMap.set(key, list);
+      }
+
+      for (const groupRows of dividendGroupMap.values()) {
+        const ordered = [...groupRows].sort((a, b) => a.rowNumber - b.rowNumber);
+        if (ordered.every((row) => resultsByRow.has(row.rowNumber))) {
+          continue;
+        }
+
+        const first = ordered[0];
+        if (!first) continue;
+
+        const allDuplicate = ordered.every((row) =>
+          existingFingerprints.has(row.rowFingerprint),
+        );
+        if (allDuplicate) {
+          for (const row of ordered) {
+            if (resultsByRow.has(row.rowNumber)) continue;
+            skippedRows += 1;
+            setResult(row, {
+              rowFingerprint: row.rowFingerprint,
+              status: 'skipped',
+              reason: 'Duplicate row fingerprint.',
+              externalReference: row.orderId,
+              assetId: null,
+              transactionId: null,
+              movementTable: null,
+              movementId: null,
+            });
+          }
+          continue;
+        }
+
+        const asset = first.isin ? assetByIsin.get(first.isin) : null;
+        if (!asset || !first.occurredAtIso) {
+          for (const row of ordered) {
+            if (resultsByRow.has(row.rowNumber)) continue;
+            failedRows += 1;
+            setResult(row, {
+              rowFingerprint: row.rowFingerprint,
+              status: 'failed',
+              reason: 'Dividend row missing asset or timestamp.',
+              externalReference: row.orderId,
+              assetId: asset?.id ?? null,
+              transactionId: null,
+              movementTable: null,
+              movementId: null,
+            });
+          }
+          continue;
+        }
+
+        const currency = normalizeCurrency(first.changeCurrency ?? 'EUR');
+        const gross = ordered
+          .filter((row) => row.rowType === 'dividend_gross')
+          .reduce((sum, row) => sum + Math.abs(row.changeAmount ?? 0), 0);
+        const withholding = ordered
+          .filter((row) => row.rowType === 'dividend_withholding')
+          .reduce((sum, row) => sum + Math.abs(row.changeAmount ?? 0), 0);
+        const net = gross - withholding;
+        if (gross <= 0 || net <= 0) {
+          for (const row of ordered) {
+            if (resultsByRow.has(row.rowNumber)) continue;
+            failedRows += 1;
+            setResult(row, {
+              rowFingerprint: row.rowFingerprint,
+              status: 'failed',
+              reason: 'Dividend gross/net could not be derived.',
+              externalReference: row.orderId,
+              assetId: asset.id,
+              transactionId: null,
+              movementTable: null,
+              movementId: null,
+            });
+          }
+          continue;
+        }
+
+        const fxRateToEur = resolveOrderFxRate(first, currency);
+        const netEur = convertStatementAmountToEur(net, currency, fxRateToEur);
+        if (netEur === null) {
+          for (const row of ordered) {
+            if (resultsByRow.has(row.rowNumber)) continue;
+            failedRows += 1;
+            setResult(row, {
+              rowFingerprint: row.rowFingerprint,
+              status: 'failed',
+              reason: 'FX rate to EUR is missing for non-EUR dividend.',
+              externalReference: row.orderId,
+              assetId: asset.id,
+              transactionId: null,
+              movementTable: null,
+              movementId: null,
+            });
+          }
+          continue;
+        }
+
+        const groupFingerprint = await sha256Hex(
+          ordered
+            .map((row) => row.rowFingerprint)
+            .sort((a, b) => a.localeCompare(b))
+            .join('|'),
+        );
+
+        const payload: CreateAssetTransactionInput = {
+          accountId: parsed.data.accountId,
+          assetId: asset.id,
+          assetType: asset.assetType,
+          transactionType: 'dividend',
+          tradedAt: first.occurredAtIso,
+          quantity: 0,
+          unitPrice: 0,
+          tradeCurrency: currency,
+          fxRateToEur,
+          feesAmount: 0,
+          feesCurrency: 'EUR',
+          dividendGross: round6(gross),
+          withholdingTax: round6(withholding),
+          dividendNet: round6(net),
+          externalReference: first.orderId,
+          notes: `Imported from DEGIRO Account Statement (${parsed.data.fileName}).`,
+        };
+
+        const validation = createAssetTransactionInputSchema.safeParse(payload);
+        if (!validation.success) {
+          for (const row of ordered) {
+            if (resultsByRow.has(row.rowNumber)) continue;
+            failedRows += 1;
+            setResult(row, {
+              rowFingerprint: row.rowFingerprint,
+              status: 'failed',
+              reason: 'Dividend row failed schema validation.',
+              externalReference: row.orderId,
+              assetId: asset.id,
+              transactionId: null,
+              movementTable: null,
+              movementId: null,
+            });
+          }
+          continue;
+        }
+
+        if (parsed.data.dryRun) {
+          for (const row of ordered) {
+            if (resultsByRow.has(row.rowNumber)) continue;
+            skippedRows += 1;
+            existingFingerprints.add(row.rowFingerprint);
+            setResult(row, {
+              rowFingerprint: row.rowFingerprint,
+              status: 'skipped',
+              reason: 'Dry run: row validated but not inserted.',
+              externalReference: row.orderId,
+              assetId: asset.id,
+              transactionId: null,
+              movementTable: 'asset_transaction',
+              movementId: null,
+            });
+          }
+          existingFingerprints.add(groupFingerprint);
+          appliedCashImpactEur += netEur;
+          continue;
+        }
+
+        try {
+          const created = await createAssetTransactionRecord(validation.data, {
+            cashImpactEurOverride: netEur,
+            rowFingerprint: groupFingerprint,
+            source: DEGIRO_ACCOUNT_STATEMENT_SOURCE,
+            skipCashBalanceValidation: true,
+          });
+          importedRows += 1;
+          createdAssetTransactions += 1;
+          appliedCashImpactEur += netEur;
+          existingFingerprints.add(groupFingerprint);
+          for (const row of ordered) {
+            if (resultsByRow.has(row.rowNumber)) continue;
+            existingFingerprints.add(row.rowFingerprint);
+            setResult(row, {
+              rowFingerprint: row.rowFingerprint,
+              status: 'imported',
+              reason: null,
+              externalReference: row.orderId,
+              assetId: asset.id,
+              transactionId: created.id,
+              movementTable: 'asset_transaction',
+              movementId: created.id,
+            });
+          }
+        } catch (error) {
+          for (const row of ordered) {
+            if (resultsByRow.has(row.rowNumber)) continue;
+            failedRows += 1;
+            setResult(row, {
+              rowFingerprint: row.rowFingerprint,
+              status: 'failed',
+              reason:
+                error instanceof Error
+                  ? error.message
+                  : 'Failed to import dividend row.',
+              externalReference: row.orderId,
+              assetId: asset.id,
+              transactionId: null,
+              movementTable: null,
+              movementId: null,
+            });
+          }
+        }
+      }
+
+      for (const row of sortedRows) {
+        if (resultsByRow.has(row.rowNumber)) continue;
+
+        if (row.rowType === 'informational') {
+          skippedRows += 1;
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'skipped',
+            reason: 'Informational row not imported.',
+            externalReference: row.orderId,
+            assetId: null,
+            transactionId: null,
+            movementTable: null,
+            movementId: null,
+          });
+          continue;
+        }
+
+        if (row.rowType === 'unknown') {
+          failedRows += 1;
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'failed',
+            reason: 'Unsupported row type.',
+            externalReference: row.orderId,
+            assetId: null,
+            transactionId: null,
+            movementTable: null,
+            movementId: null,
+          });
+          continue;
+        }
+
+        const isCashMovementRow =
+          row.rowType === 'deposit' ||
+          row.rowType === 'connectivity_fee' ||
+          row.rowType === 'interest' ||
+          row.rowType === 'generic_credit' ||
+          row.rowType === 'fx_internal_credit' ||
+          row.rowType === 'fx_internal_debit' ||
+          row.rowType === 'cash_sweep_internal';
+        if (!isCashMovementRow) {
+          continue;
+        }
+
+        if (existingFingerprints.has(row.rowFingerprint)) {
+          skippedRows += 1;
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'skipped',
+            reason: 'Duplicate row fingerprint.',
+            externalReference: row.orderId,
+            assetId: null,
+            transactionId: null,
+            movementTable: null,
+            movementId: null,
+          });
+          continue;
+        }
+
+        if (!row.occurredAtIso || row.changeAmount === null) {
+          failedRows += 1;
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'failed',
+            reason: 'Cash movement row is missing timestamp or amount.',
+            externalReference: row.orderId,
+            assetId: null,
+            transactionId: null,
+            movementTable: null,
+            movementId: null,
+          });
+          continue;
+        }
+
+        const currency = normalizeCurrency(row.changeCurrency ?? 'EUR');
+        const affectsCashBalance = statementAffectsCash(row.rowType);
+        const fxRateToEur = resolveOrderFxRate(row, currency);
+        const cashImpactEur = affectsCashBalance
+          ? convertStatementAmountToEur(row.changeAmount, currency, fxRateToEur)
+          : 0;
+        if (cashImpactEur === null) {
+          failedRows += 1;
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'failed',
+            reason: 'FX rate to EUR is missing for non-EUR cash movement.',
+            externalReference: row.orderId,
+            assetId: null,
+            transactionId: null,
+            movementTable: null,
+            movementId: null,
+          });
+          continue;
+        }
+
+        if (parsed.data.dryRun) {
+          skippedRows += 1;
+          existingFingerprints.add(row.rowFingerprint);
+          if (affectsCashBalance) {
+            appliedCashImpactEur += cashImpactEur;
+          }
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'skipped',
+            reason: 'Dry run: row validated but not inserted.',
+            externalReference: row.orderId,
+            assetId: null,
+            transactionId: null,
+            movementTable: 'cash_movement',
+            movementId: null,
+          });
+          continue;
+        }
+
+        try {
+          const createdId = await createAccountCashMovementRecord({
+            accountId: parsed.data.accountId,
+            movementType: statementCashMovementType(row.rowType),
+            occurredAt: row.occurredAtIso,
+            valueDate: row.valueDate,
+            nativeAmount: row.changeAmount,
+            currency,
+            fxRateToEur: affectsCashBalance ? fxRateToEur : null,
+            cashImpactEur,
+            externalReference: row.orderId,
+            rowFingerprint: row.rowFingerprint,
+            source: DEGIRO_ACCOUNT_STATEMENT_SOURCE,
+            description: row.description || null,
+            rawPayload: row.raw,
+            affectsCashBalance,
+          });
+          importedRows += 1;
+          createdCashMovements += 1;
+          existingFingerprints.add(row.rowFingerprint);
+          if (affectsCashBalance) {
+            appliedCashImpactEur += cashImpactEur;
+          }
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'imported',
+            reason: null,
+            externalReference: row.orderId,
+            assetId: null,
+            transactionId: null,
+            movementTable: 'cash_movement',
+            movementId: createdId,
+          });
+        } catch (error) {
+          failedRows += 1;
+          setResult(row, {
+            rowFingerprint: row.rowFingerprint,
+            status: 'failed',
+            reason:
+              error instanceof Error
+                ? error.message
+                : 'Failed to import cash movement row.',
+            externalReference: row.orderId,
+            assetId: null,
+            transactionId: null,
+            movementTable: null,
+            movementId: null,
+          });
+        }
+      }
+
+      const results = parsedCsv.rows
+        .map((row) => {
+          const result = resultsByRow.get(row.rowNumber);
+          if (result) {
+            return result;
+          }
+          return {
+            rowNumber: row.rowNumber,
+            rowType: row.rowType,
+            rowFingerprint: row.rowFingerprint,
+            status: 'failed' as const,
+            reason: 'Row was not processed.',
+            externalReference: row.orderId,
+            assetId: null,
+            transactionId: null,
+            movementTable: null,
+            movementId: null,
+          };
+        })
+        .sort((a, b) => a.rowNumber - b.rowNumber);
+
+      const failedMissing = results.filter((row) => row.status === 'failed').length;
+      if (failedMissing > failedRows) {
+        failedRows = failedMissing;
+      }
+
+      await withTimedDb('degiro_statement_import_rows_insert', async () =>
+        db.insert(transactionImportRows).values(
+          results.map((result) => ({
+            importId: importRun.id,
+            rowNumber: result.rowNumber,
+            status: result.status,
+            errorCode:
+              result.status === 'failed'
+                ? 'ROW_IMPORT_FAILED'
+                : result.status === 'skipped'
+                  ? 'ROW_SKIPPED'
+                  : null,
+            errorMessage: result.reason,
+            externalReference: result.externalReference,
+            rowFingerprint: result.rowFingerprint,
+            rowType: result.rowType,
+            movementTable: result.movementTable,
+            movementId: result.movementId,
+            assetId: result.assetId,
+            transactionId: result.transactionId,
+            rawPayload:
+              parsedCsv.rows.find((row) => row.rowNumber === result.rowNumber)
+                ?.raw ?? {},
+          })),
+        ),
+      );
+
+      await withTimedDb('degiro_statement_import_run_finalize', async () =>
+        db
+          .update(transactionImports)
+          .set({
+            totalRows: parsedCsv.rows.length,
+            importedRows,
+            skippedRows,
+            failedRows,
+            updatedAt: new Date(),
+          })
+          .where(eq(transactionImports.id, importRun.id)),
+      );
+
+      const expectedFinalCashEur =
+        parsedCsv.rows.find(
+          (row) =>
+            normalizeCurrency(row.balanceCurrency ?? '') === 'EUR' &&
+            row.balanceAmount !== null,
+        )?.balanceAmount ?? 0;
+
+      const currentCash = await getAccountCashBalance(parsed.data.accountId);
+      const computedFinalCashEur =
+        parsed.data.dryRun || currentCash === null
+          ? round2((currentCash ?? 0) + appliedCashImpactEur)
+          : round2(currentCash);
+
+      return {
+        importId: String(importRun.id),
+        source: DEGIRO_ACCOUNT_STATEMENT_SOURCE,
+        fileName: parsed.data.fileName,
+        fileHash,
+        dryRun: parsed.data.dryRun,
+        totalRows: parsedCsv.rows.length,
+        importedRows,
+        skippedRows,
+        failedRows,
+        linkedFeeRows,
+        createdCashMovements,
+        createdAssetTransactions,
+        expectedFinalCashEur: round2(expectedFinalCashEur),
+        computedFinalCashEur,
+        deltaEur: round2(expectedFinalCashEur - computedFinalCashEur),
+        results,
+      };
+    },
+  );
 
   app.get('/finances/tax/yearly-summary', async ({ query }) => {
     const yearRaw = Number(query.year ?? new Date().getUTCFullYear());
@@ -1672,11 +3344,41 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         `);
       });
 
+      const cashMovementRows = await withTimedDb(
+        'overview_cash_movements',
+        async () => {
+          if (selectedAccountId === 'all') {
+            return db.execute(sql`
+              select
+                account_id as "accountId",
+                occurred_at as "occurredAt",
+                movement_type as "movementType",
+                cash_impact_eur as "cashImpactEur"
+              from finances.account_cash_movements
+              where affects_cash_balance = true
+              order by occurred_at asc
+            `);
+          }
+          return db.execute(sql`
+            select
+              account_id as "accountId",
+              occurred_at as "occurredAt",
+              movement_type as "movementType",
+              cash_impact_eur as "cashImpactEur"
+            from finances.account_cash_movements
+            where account_id = ${selectedAccountId}
+              and affects_cash_balance = true
+            order by occurred_at asc
+          `);
+        },
+      );
+
       const assetRows = await withTimedDb('overview_assets', async () => {
         return db.execute(sql`
           select
             a.id as "assetId",
             a.name as "assetName",
+            a.asset_type as "assetType",
             coalesce(a.provider_symbol, a.symbol, a.ticker) as symbol,
             a.currency as currency,
             ap.manual_price as "manualPrice"
@@ -1713,9 +3415,17 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         cashImpactEur: Number(row.cashImpactEur ?? 0),
       }));
 
+      const cashMovements = cashMovementRows.map((row) => ({
+        accountId: String(row.accountId),
+        occurredAtMs: new Date(String(row.occurredAt)).getTime(),
+        movementType: String(row.movementType ?? 'other'),
+        cashImpactEur: Number(row.cashImpactEur ?? 0),
+      }));
+
       const assetMetaById = new Map<
         string,
         {
+          assetType: AssetType;
           symbol: string;
           name: string;
           currency: string;
@@ -1724,6 +3434,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       >();
       for (const row of assetRows) {
         assetMetaById.set(String(row.assetId), {
+          assetType: String(row.assetType) as AssetType,
           symbol: String(row.symbol),
           name: String(row.assetName),
           currency: normalizeCurrency(String(row.currency ?? 'EUR')),
@@ -1737,8 +3448,13 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       const txTimestamps = tx
         .map((row) => row.tradedAtMs)
         .filter((value) => Number.isFinite(value));
+      const cashTimestamps = cashMovements
+        .map((row) => row.occurredAtMs)
+        .filter((value) => Number.isFinite(value));
       const minTransactionTimestampMs =
-        txTimestamps.length === 0 ? null : Math.min(...txTimestamps);
+        txTimestamps.length === 0 && cashTimestamps.length === 0
+          ? null
+          : Math.min(...txTimestamps, ...cashTimestamps);
 
       const symbols = [...symbolSet];
       let minPriceTimestampMs: number | null = null;
@@ -1976,9 +3692,18 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
             break;
           }
         }
-        if (value !== null) return value;
-        const firstAfter = list.find((point) => point.pricedAtMs > tsMs);
-        return firstAfter?.price ?? null;
+        return value;
+      };
+
+      const priceAtOrAfter = (symbol: string, tsMs: number): number | null => {
+        const list = pricesBySymbol.get(symbol);
+        if (!list || list.length === 0) return null;
+        for (const point of list) {
+          if (point.pricedAtMs >= tsMs) {
+            return point.price;
+          }
+        }
+        return null;
       };
 
       const quantityByAssetAt = (tsMs: number) => {
@@ -2002,6 +3727,11 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         let value = openingCash;
         for (const row of tx) {
           if (row.tradedAtMs <= tsMs) {
+            value += row.cashImpactEur;
+          }
+        }
+        for (const row of cashMovements) {
+          if (row.occurredAtMs <= tsMs) {
             value += row.cashImpactEur;
           }
         }
@@ -2058,17 +3788,6 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         return round2(total);
       };
 
-      const totalValue = portfolioTotalAt(asOfMs, true);
-      const previousTotalValue =
-        previousAsOfMs === null
-          ? totalValue
-          : portfolioTotalAt(previousAsOfMs, true);
-      const deltaValue = round2(totalValue - previousTotalValue);
-      const deltaPct =
-        previousTotalValue === 0
-          ? 0
-          : round2((deltaValue / previousTotalValue) * 100);
-
       const rangePointTimes = [
         ...new Set(
           distinctPriceTimes.filter((ts) => ts >= rangeStartMs && ts <= asOfMs),
@@ -2084,6 +3803,14 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         tsIso: new Date(tsMs).toISOString(),
         value: portfolioTotalAt(tsMs, true),
       }));
+      const totalValue = series[series.length - 1]?.value ?? portfolioTotalAt(asOfMs, true);
+      const baselineTotalValue = series[0]?.value ?? totalValue;
+      const deltaValue = round2(totalValue - baselineTotalValue);
+      const pctDenominator = Math.abs(baselineTotalValue);
+      const deltaPct =
+        pctDenominator === 0
+          ? 0
+          : round2((deltaValue / pctDenominator) * 100);
 
       const currentQuantities = quantityByAssetAt(asOfMs);
       const buyStatsByAsset = new Map<string, { qty: number; total: number }>();
@@ -2117,6 +3844,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
             priceAtOrBefore(meta.symbol, asOfMs) ?? meta.manualPrice;
           const startMarketOrManualUnit =
             priceAtOrBefore(meta.symbol, rangeStartMs) ??
+            priceAtOrAfter(meta.symbol, rangeStartMs) ??
             currentMarketOrManualUnit;
           const currentFxToEur = fxRateForAssetAt(assetId, asOfMs);
           const startFxToEur = fxRateForAssetAt(assetId, rangeStartMs);
@@ -2146,6 +3874,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
 
           return {
             assetId,
+            assetType: meta.assetType,
             symbol: meta.symbol,
             name: meta.name,
             quoteCurrency: meta.currency,
@@ -2168,10 +3897,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         rangeStartIso: rangeStart.toISOString(),
         accountId: selectedAccountId,
         asOfIso: new Date(asOfMs).toISOString(),
-        previousAsOfIso:
-          previousAsOfMs === null
-            ? null
-            : new Date(previousAsOfMs).toISOString(),
+        previousAsOfIso: new Date(rangeStartMs).toISOString(),
         totalValue,
         deltaValue,
         deltaPct,
@@ -2190,10 +3916,30 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       return db.execute(sql`
         with account_cash as (
           select
-            coalesce(sum(a.opening_balance_eur), 0)::numeric +
-            coalesce(sum(at.cash_impact_eur), 0)::numeric as total_balance
+            coalesce(
+              sum(
+                a.opening_balance_eur +
+                coalesce(at_sum.asset_cash_impact_eur, 0) +
+                coalesce(acm_sum.cash_movement_impact_eur, 0)
+              ),
+              0
+            )::numeric as total_balance
           from finances.accounts a
-          left join finances.asset_transactions at on at.account_id = a.id
+          left join (
+            select
+              account_id,
+              coalesce(sum(cash_impact_eur), 0)::numeric as asset_cash_impact_eur
+            from finances.asset_transactions
+            group by account_id
+          ) at_sum on at_sum.account_id = a.id
+          left join (
+            select
+              account_id,
+              coalesce(sum(cash_impact_eur), 0)::numeric as cash_movement_impact_eur
+            from finances.account_cash_movements
+            where affects_cash_balance = true
+            group by account_id
+          ) acm_sum on acm_sum.account_id = a.id
         ),
         tx as (
           select
@@ -2202,17 +3948,24 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
             count(*)::int as transaction_count
           from finances.asset_transactions
         ),
+        cash_tx as (
+          select
+            coalesce(sum(case when cash_impact_eur > 0 and occurred_at >= date_trunc('month', now()) and affects_cash_balance then cash_impact_eur else 0 end), 0)::numeric as monthly_inflow,
+            coalesce(sum(case when cash_impact_eur < 0 and occurred_at >= date_trunc('month', now()) and affects_cash_balance then cash_impact_eur else 0 end), 0)::numeric as monthly_outflow,
+            count(*)::int as transaction_count
+          from finances.account_cash_movements
+        ),
         ac as (
           select count(*)::int as account_count
           from finances.accounts
         )
         select
           account_cash.total_balance,
-          tx.monthly_inflow,
-          tx.monthly_outflow,
-          tx.transaction_count,
+          (tx.monthly_inflow + cash_tx.monthly_inflow)::numeric as monthly_inflow,
+          (tx.monthly_outflow + cash_tx.monthly_outflow)::numeric as monthly_outflow,
+          (tx.transaction_count + cash_tx.transaction_count)::int as transaction_count,
           ac.account_count
-        from account_cash, tx, ac
+        from account_cash, tx, cash_tx, ac
       `);
     });
     const safeResult = result ?? {

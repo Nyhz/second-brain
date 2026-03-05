@@ -1,4 +1,6 @@
-export type OverviewRange = '1D' | '1W' | '1M' | 'YTD' | '1Y' | 'MAX';
+import type { AssetType } from '@second-brain/types';
+
+export type OverviewRange = '1W' | '1M' | 'YTD' | '1Y' | 'MAX';
 
 export type OverviewAccountTab = {
   id: string;
@@ -12,6 +14,7 @@ export type OverviewSeriesRow = {
 
 export type OverviewPositionRow = {
   assetId: string;
+  assetType: AssetType;
   symbol: string;
   name: string;
   quoteCurrency: string;

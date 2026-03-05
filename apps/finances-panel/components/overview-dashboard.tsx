@@ -18,7 +18,7 @@ import {
   KpiCard,
 } from './ui';
 
-const RANGES: OverviewRange[] = ['1D', '1W', '1M', 'YTD', '1Y', 'MAX'];
+const RANGES: OverviewRange[] = ['1W', '1M', 'YTD', '1Y', 'MAX'];
 
 const formatSignedPercent = (value: number) =>
   `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
@@ -34,12 +34,16 @@ const formatQuoteUnit = (value: number, currency: string) => {
   return `${amount} ${normalized}`;
 };
 
+const formatOverviewQuantity = (row: OverviewPositionRow) => {
+  if (row.assetType === 'crypto') {
+    return row.quantity.toFixed(4);
+  }
+  return row.quantity.toFixed(0);
+};
+
 const labelForPoint = (iso: string, range: OverviewRange) => {
   const date = new Date(iso);
   if (Number.isNaN(date.valueOf())) return iso;
-  if (range === '1D') {
-    return date.toISOString().slice(11, 16);
-  }
   if (range === '1W' || range === '1M') {
     return date.toISOString().slice(5, 10);
   }
@@ -60,6 +64,7 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
       data.series.map((point) => ({
         label: labelForPoint(point.tsIso, data.range),
         value: point.value,
+        dateIso: point.tsIso,
       })),
     [data.range, data.series],
   );
@@ -198,7 +203,7 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
       <Card title="Performance" contentClassName="space-y-4 px-0 pb-0 pt-4">
         <div className="px-5">
           <p className="text-sm text-muted-foreground">
-            Total {formatMoney(data.totalValue)} · as of{' '}
+            Total portfolio value (includes deposits/withdrawals) · Total {formatMoney(data.totalValue)} · as of{' '}
             {formatDateTime(data.asOfIso)}
           </p>
         </div>
@@ -212,7 +217,10 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
             <EmptyState message="No performance data available yet." />
           </div>
         ) : (
-          <AreaPerformanceChart data={chartData} />
+          <AreaPerformanceChart
+            data={chartData}
+            baselineValue={chartData[0]?.value ?? null}
+          />
         )}
       </Card>
 
@@ -239,7 +247,8 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
               {
                 key: 'qty',
                 header: 'Quantity',
-                render: (row: OverviewPositionRow) => row.quantity.toFixed(6),
+                render: (row: OverviewPositionRow) =>
+                  formatOverviewQuantity(row),
               },
               {
                 key: 'avg-unit',

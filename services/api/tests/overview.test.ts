@@ -176,6 +176,7 @@ mock.module('@second-brain/db', () => {
   const priceHistory = { __table: 'priceHistory' };
   const transactionImports = { __table: 'transactionImports' };
   const transactionImportRows = { __table: 'transactionImportRows' };
+  const accountCashMovements = { __table: 'accountCashMovements' };
 
   return {
     createDbClient,
@@ -190,6 +191,7 @@ mock.module('@second-brain/db', () => {
     priceHistory,
     transactionImports,
     transactionImportRows,
+    accountCashMovements,
   };
 });
 
