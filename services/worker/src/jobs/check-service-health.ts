@@ -15,6 +15,25 @@ type ProbeResult = {
   errorMessage: string | null;
 };
 
+const startOfUtcHour = (date: Date) =>
+  new Date(
+    Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate(),
+      date.getUTCHours(),
+      0,
+      0,
+      0,
+    ),
+  );
+
+const addUtcHours = (date: Date, hours: number) => {
+  const out = new Date(date);
+  out.setUTCHours(out.getUTCHours() + hours);
+  return out;
+};
+
 export const probeService = async (
   target: ProbeTarget,
   timeoutMs: number,
@@ -61,7 +80,7 @@ export const checkServiceHealth = async (
   databaseUrl: string,
   targets: ProbeTarget[],
   timeoutMs: number,
-  retentionPerService = 24,
+  retentionHoursPerService = 24,
 ): Promise<Record<string, unknown>> => {
   const { sql } = createDbClient(databaseUrl);
   const results = await Promise.all(
@@ -69,6 +88,17 @@ export const checkServiceHealth = async (
   );
 
   for (const result of results) {
+    const checkedAtDate = new Date(result.checkedAt);
+    const hourStart = startOfUtcHour(checkedAtDate);
+    const hourEnd = addUtcHours(hourStart, 1);
+
+    await sql`
+      delete from core.service_health_checks
+      where service_name = ${result.service}
+        and checked_at >= ${hourStart.toISOString()}
+        and checked_at < ${hourEnd.toISOString()}
+    `;
+
     await sql`
       insert into core.service_health_checks (
         service_name,
@@ -101,12 +131,17 @@ export const checkServiceHealth = async (
         select
           id,
           row_number() over (
-            partition by service_name
+            partition by service_name, date_trunc('hour', checked_at)
             order by checked_at desc
-          ) as row_num
+          ) as row_in_hour,
+          dense_rank() over (
+            partition by service_name
+            order by date_trunc('hour', checked_at) desc
+          ) as hour_rank
         from core.service_health_checks
       ) as ranked
-      where ranked.row_num > ${retentionPerService}
+      where ranked.row_in_hour > 1
+        or ranked.hour_rank > ${retentionHoursPerService}
     ) as stale
     where checks.id = stale.id
   `;

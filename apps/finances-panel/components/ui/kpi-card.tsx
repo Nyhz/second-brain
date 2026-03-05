@@ -4,14 +4,22 @@ type KpiCardProps = {
   label: string;
   value: string;
   delta?: string;
+  subtext?: string;
 };
 
-export function KpiCard({ label, value, delta }: KpiCardProps) {
+export function KpiCard({ label, value, delta, subtext }: KpiCardProps) {
   return (
-    <Card className="px-4 py-4">
-      <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="mt-2 text-2xl font-semibold">{value}</div>
-      {delta ? <div className="mt-2 text-sm text-muted-foreground">{delta}</div> : null}
+    <Card contentClassName="px-4 py-4">
+      <div className="text-xs uppercase tracking-wide text-muted-foreground">
+        {label}
+      </div>
+      <div className="mt-2 text-2xl font-semibold tracking-tight">{value}</div>
+      {delta ? (
+        <div className="mt-2 text-sm text-muted-foreground">{delta}</div>
+      ) : null}
+      {subtext ? (
+        <div className="mt-1 text-xs text-muted-foreground">{subtext}</div>
+      ) : null}
     </Card>
   );
 }

@@ -27,7 +27,7 @@
     --success: 142.1 70.6% 45.3%;
   }
 
-  :root[data-theme='light'] {
+  :root[data-theme="light"] {
     --background: 0 0% 100%;
     --foreground: 240 10% 3.9%;
     --card: 0 0% 100%;
@@ -66,7 +66,7 @@ body {
   margin: 0;
   min-height: 100vh;
   color: hsl(var(--foreground));
-  font-family: 'Inter', 'Avenir Next', sans-serif;
+  font-family: "Inter", "Avenir Next", sans-serif;
 }
 
 .portal-shell {

@@ -1,9 +1,9 @@
 import type { Account } from '@second-brain/types';
-import { tryApi } from './shared';
+import { apiRequest } from '../api';
 
 export const loadAccountsData = async () => {
-  const rows = await tryApi<Account[]>('/finances/accounts');
+  const rows = await apiRequest<Account[]>('/finances/accounts');
   return {
-    rows: rows ?? [],
+    rows,
   } as const;
 };

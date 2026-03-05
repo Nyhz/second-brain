@@ -7,21 +7,15 @@ import { toInputDate, validateTransactionForm } from '../lib/transactions';
 
 describe('finances panel workflow helpers', () => {
   test('validates account creation payload', () => {
-    expect(validateAccountForm('', 'usd')).toEqual({
+    expect(validateAccountForm('')).toEqual({
       ok: false,
       message: 'Account name is required.',
     });
 
-    expect(validateAccountForm('Main', 'US')).toEqual({
-      ok: false,
-      message: 'Currency must be a 3-letter code (for example, USD).',
-    });
-
-    expect(validateAccountForm(' Main ', 'usd')).toEqual({
+    expect(validateAccountForm(' Main ')).toEqual({
       ok: true,
       normalized: {
         name: 'Main',
-        currency: 'USD',
       },
     });
   });
@@ -40,6 +34,8 @@ describe('finances panel workflow helpers', () => {
         fxRateToEur: '',
         feesAmount: '0',
         feesCurrency: 'EUR',
+        dividendGross: '',
+        dividendNet: '',
         notes: '',
       }),
     ).toEqual({
@@ -60,6 +56,8 @@ describe('finances panel workflow helpers', () => {
         fxRateToEur: '',
         feesAmount: '0',
         feesCurrency: 'EUR',
+        dividendGross: '',
+        dividendNet: '',
         notes: '',
       }),
     ).toEqual({
@@ -80,11 +78,29 @@ describe('finances panel workflow helpers', () => {
         fxRateToEur: '',
         feesAmount: '0',
         feesCurrency: 'EUR',
+        dividendGross: '10',
+        dividendNet: '8.5',
         notes: '',
       }),
     ).toEqual({
-      ok: false,
-      message: 'Dividend transactions are not supported in this app.',
+      ok: true,
+      normalized: {
+        accountId: '1',
+        assetType: 'stock',
+        assetId: '2',
+        transactionType: 'dividend',
+        tradedAt: '2026-03-03T12:00',
+        quantity: 0,
+        unitPrice: 0,
+        tradeCurrency: 'EUR',
+        fxRateToEur: null,
+        feesAmount: 0,
+        feesCurrency: 'EUR',
+        dividendGross: 10,
+        withholdingTax: 1.5,
+        dividendNet: 8.5,
+        notes: null,
+      },
     });
 
     expect(
@@ -100,6 +116,8 @@ describe('finances panel workflow helpers', () => {
         fxRateToEur: '',
         feesAmount: '0.5',
         feesCurrency: 'EUR',
+        dividendGross: '',
+        dividendNet: '',
         notes: ' note ',
       }),
     ).toEqual({
@@ -116,13 +134,16 @@ describe('finances panel workflow helpers', () => {
         fxRateToEur: null,
         feesAmount: 0.5,
         feesCurrency: 'EUR',
+        dividendGross: null,
+        withholdingTax: null,
+        dividendNet: null,
         notes: 'note',
       },
     });
   });
 
   test('formats amounts and dates for display', () => {
-    expect(formatMoney(1234.5)).toBe('$1,234.50');
+    expect(formatMoney(1234.5)).toBe('€1,234.50');
     expect(toInputDate('2026-03-01T12:30:00.000Z')).toMatch(
       /^2026-03-01T12:30/,
     );

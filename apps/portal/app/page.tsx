@@ -55,23 +55,35 @@ const emptyHistory: ServiceStatusHistoryResponse = {
   ],
 };
 
-const loadHistory = async (): Promise<ServiceStatusHistoryResponse> => {
+const loadHistory = async (): Promise<{
+  history: ServiceStatusHistoryResponse;
+  errorMessage: string | null;
+}> => {
   const apiBase = process.env.INTERNAL_API_URL ?? 'http://api:3001';
   try {
     const response = await fetch(`${apiBase}/ops/status/history?hours=24`, {
       cache: 'no-store',
     });
     if (!response.ok) {
-      return emptyHistory;
+      return {
+        history: emptyHistory,
+        errorMessage: `Failed to load operations history (HTTP ${response.status}).`,
+      };
     }
-    return (await response.json()) as ServiceStatusHistoryResponse;
+    return {
+      history: (await response.json()) as ServiceStatusHistoryResponse,
+      errorMessage: null,
+    };
   } catch {
-    return emptyHistory;
+    return {
+      history: emptyHistory,
+      errorMessage: 'Failed to load operations history from API.',
+    };
   }
 };
 
 export default async function HomePage() {
-  const history = await loadHistory();
+  const { history, errorMessage } = await loadHistory();
 
   return (
     <main className="portal-shell">
@@ -104,7 +116,7 @@ export default async function HomePage() {
         ))}
       </section>
 
-      <OperationsStatus initialHistory={history} />
+      <OperationsStatus initialHistory={history} errorMessage={errorMessage} />
     </main>
   );
 }

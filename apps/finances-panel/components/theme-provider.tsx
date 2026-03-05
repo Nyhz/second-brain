@@ -1,12 +1,13 @@
 'use client';
 
 import {
+  type ReactNode,
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
   useState,
-  type ReactNode,
 } from 'react';
 
 type ThemeMode = 'dark' | 'light';
@@ -30,18 +31,20 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     document.documentElement.setAttribute('data-theme', next);
   }, []);
 
-  const setThemeMode = (nextMode: ThemeMode) => {
+  const setThemeMode = useCallback((nextMode: ThemeMode) => {
     setMode(nextMode);
     document.documentElement.setAttribute('data-theme', nextMode);
     window.localStorage.setItem(KEY, nextMode);
-  };
+  }, []);
 
   const value = useMemo(
     () => ({ mode, setMode: setThemeMode }),
     [mode, setThemeMode],
   );
 
-  return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>;
+  return (
+    <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
+  );
 }
 
 export const useThemeMode = () => {

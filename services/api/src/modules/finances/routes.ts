@@ -8,17 +8,22 @@ import {
   desc,
   eq,
   sql,
+  transactionImportRows,
+  transactionImports,
 } from '@second-brain/db';
 import {
   type Asset,
   type AssetPosition,
   type AssetTransaction,
   type AssetType,
+  type CreateAssetTransactionInput,
+  type DegiroImportResult,
   type FinancesOverviewResponse,
   type OverviewRange,
   createAccountInputSchema,
   createAssetInputSchema,
   createAssetTransactionInputSchema,
+  degiroImportRequestSchema,
   overviewRangeSchema,
   updateAssetInputSchema,
   upsertAssetPositionInputSchema,
@@ -26,6 +31,11 @@ import {
 import type { Elysia } from 'elysia';
 import { withTimedDb } from '../../lib/db-timed';
 import { ApiHttpError } from '../../lib/errors';
+import {
+  getDegiroAssetType,
+  getDegiroTicker,
+  parseDegiroTransactionsCsv,
+} from './degiro-import';
 
 const normalizeCurrency = (value: string) => value.trim().toUpperCase();
 
@@ -153,6 +163,7 @@ const serializeAssetTransaction = (
 });
 
 const round2 = (value: number) => Number(value.toFixed(2));
+const EURUSD_FX_SYMBOL = 'EURUSD=X';
 
 const OVERVIEW_RANGES: OverviewRange[] = ['1D', '1W', '1M', 'YTD', '1Y', 'MAX'];
 
@@ -160,6 +171,14 @@ const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 const round6 = (value: number) => Number(value.toFixed(6));
+
+const sha256Hex = async (value: string) => {
+  const encoded = new TextEncoder().encode(value);
+  const digest = await crypto.subtle.digest('SHA-256', encoded);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
+};
 
 const startOfUtcDay = (date: Date) =>
   new Date(
@@ -245,8 +264,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     });
 
     return withTimedDb('resolve_asset_prices', async () => {
-      const views = [];
-      for (const row of rows) {
+      const assetRows = rows.map((row) => {
         const asset = serializeAsset(row as Record<string, unknown>);
         const position =
           row.positionId === null || row.positionId === undefined
@@ -262,26 +280,123 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
                 updatedAt: row.positionUpdatedAt ?? row.updatedAt,
               });
 
+        return {
+          row,
+          asset,
+          position,
+          symbolToPrice:
+            asset.providerSymbol ?? asset.symbol ?? asset.ticker ?? null,
+        };
+      });
+
+      const uniqueSymbols = [
+        ...new Set(
+          assetRows
+            .map((item) => item.symbolToPrice)
+            .filter((value): value is string => Boolean(value)),
+        ),
+      ];
+      const uniqueAssetIds = [
+        ...new Set(assetRows.map((item) => item.asset.id).filter(Boolean)),
+      ];
+
+      const latestPriceBySymbol = new Map<
+        string,
+        { price: number; pricedAt: string }
+      >();
+      if (uniqueSymbols.length > 0) {
+        const latestPriceRows = await db.execute(sql`
+          with latest as (
+            select distinct on (symbol)
+              symbol,
+              price,
+              priced_at
+            from finances.price_history
+            where symbol in (${sql.join(
+              uniqueSymbols.map((symbol) => sql`${symbol}`),
+              sql`, `,
+            )})
+            order by symbol, priced_at desc
+          )
+          select
+            symbol,
+            price,
+            priced_at as "pricedAt"
+          from latest
+        `);
+
+        for (const priceRow of latestPriceRows) {
+          const symbol = String(priceRow.symbol);
+          const price = Number(priceRow.price ?? 0);
+          if (!Number.isFinite(price) || price <= 0) {
+            continue;
+          }
+          latestPriceBySymbol.set(symbol, {
+            price,
+            pricedAt: toIso(priceRow.pricedAt),
+          });
+        }
+      }
+
+      const [marketFxRow] = await db.execute(sql`
+        select price
+        from finances.price_history
+        where symbol = ${EURUSD_FX_SYMBOL}
+          and (source = 'yahoo_fx' or source = 'yahoo')
+        order by priced_at desc
+        limit 1
+      `);
+      const eurusd = Number(marketFxRow?.price ?? 0);
+      const marketUsdToEur =
+        Number.isFinite(eurusd) && eurusd > 0 ? 1 / eurusd : null;
+
+      const latestTxFxByAssetCurrency = new Map<string, number>();
+      if (uniqueAssetIds.length > 0) {
+        const latestFxRows = await db.execute(sql`
+          with latest_fx as (
+            select distinct on (asset_id, trade_currency)
+              asset_id as "assetId",
+              trade_currency as "tradeCurrency",
+              fx_rate_to_eur as "fxRateToEur"
+            from finances.asset_transactions
+            where asset_id in (${sql.join(
+              uniqueAssetIds.map((assetId) => sql`${assetId}`),
+              sql`, `,
+            )})
+              and fx_rate_to_eur is not null
+            order by asset_id, trade_currency, traded_at desc
+          )
+          select
+            "assetId",
+            "tradeCurrency",
+            "fxRateToEur"
+          from latest_fx
+        `);
+
+        for (const fxRow of latestFxRows) {
+          const assetId = String(fxRow.assetId);
+          const tradeCurrency = normalizeCurrency(String(fxRow.tradeCurrency));
+          const fxRate = Number(fxRow.fxRateToEur ?? 0);
+          if (!Number.isFinite(fxRate) || fxRate <= 0) {
+            continue;
+          }
+          latestTxFxByAssetCurrency.set(`${assetId}:${tradeCurrency}`, fxRate);
+        }
+      }
+
+      const views = [];
+      for (const item of assetRows) {
+        const { asset, position, symbolToPrice } = item;
         let resolvedUnitPrice: number | null = null;
         let resolvedPriceSource: 'manual' | 'market' | null = null;
         let resolvedPriceAsOf: string | null = null;
 
-        const symbolToPrice = asset.symbol ?? asset.ticker;
         if (symbolToPrice) {
-          const [priceRow] = await db.execute(sql`
-            select
-              price,
-              priced_at as "pricedAt"
-            from finances.price_history
-            where symbol = ${symbolToPrice}
-            order by priced_at desc
-            limit 1
-          `);
-
-          if (priceRow) {
-            resolvedUnitPrice = Number(priceRow.price);
+          const latestPrice = latestPriceBySymbol.get(symbolToPrice);
+          if (latestPrice) {
+            resolvedUnitPrice = latestPrice.price;
             resolvedPriceSource = 'market';
-            resolvedPriceAsOf = toIso(priceRow.pricedAt);
+            resolvedPriceAsOf = latestPrice.pricedAt;
           }
         }
 
@@ -295,9 +410,26 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
           resolvedPriceAsOf = position.manualPriceAsOf;
         }
 
+        let valuationFxRateToEur: number;
+        if (asset.currency === 'EUR') {
+          valuationFxRateToEur = 1;
+        } else if (asset.currency === 'USD' && marketUsdToEur !== null) {
+          valuationFxRateToEur = marketUsdToEur;
+        } else {
+          const fallbackFx =
+            latestTxFxByAssetCurrency.get(`${asset.id}:${asset.currency}`) ?? 1;
+          valuationFxRateToEur = fallbackFx > 0 ? fallbackFx : 1;
+        }
+
         const currentValue =
           position && resolvedUnitPrice !== null
-            ? Number((position.quantity * resolvedUnitPrice).toFixed(2))
+            ? Number(
+                (
+                  position.quantity *
+                  resolvedUnitPrice *
+                  valuationFxRateToEur
+                ).toFixed(2),
+              )
             : null;
 
         views.push({
@@ -367,6 +499,174 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     return Number(row.cash_balance ?? 0);
   };
 
+  const createAssetTransactionRecord = async (
+    input: CreateAssetTransactionInput,
+    options?: { cashImpactEurOverride?: number },
+  ) => {
+    const tradeCurrency = normalizeCurrency(input.tradeCurrency);
+    const feesCurrency = normalizeCurrency(
+      input.feesCurrency ?? input.tradeCurrency,
+    );
+
+    const [accountRow] = await withTimedDb(
+      'asset_tx_account_exists',
+      async () => {
+        return db
+          .select({ id: accounts.id })
+          .from(accounts)
+          .where(eq(accounts.id, input.accountId));
+      },
+    );
+    if (!accountRow) {
+      throw new ApiHttpError(
+        404,
+        'ACCOUNT_NOT_FOUND',
+        'Account does not exist',
+      );
+    }
+
+    const [assetRow] = await withTimedDb('asset_tx_asset_exists', async () => {
+      return db
+        .select({ id: assets.id, assetType: assets.assetType })
+        .from(assets)
+        .where(eq(assets.id, input.assetId));
+    });
+    if (!assetRow) {
+      throw new ApiHttpError(404, 'ASSET_NOT_FOUND', 'Asset does not exist');
+    }
+    if (assetRow.assetType !== input.assetType) {
+      throw new ApiHttpError(
+        400,
+        'ASSET_TYPE_MISMATCH',
+        'Selected asset does not match selected asset type',
+      );
+    }
+
+    const tradedAmount = input.quantity * input.unitPrice;
+    const tradedAmountEur = convertToEur(
+      tradedAmount,
+      tradeCurrency,
+      input.fxRateToEur ?? null,
+    );
+    const feesAmountEur = convertToEur(
+      input.feesAmount,
+      feesCurrency,
+      input.fxRateToEur ?? null,
+    );
+
+    let cashImpactEur =
+      options?.cashImpactEurOverride === undefined
+        ? 0
+        : options.cashImpactEurOverride;
+    if (options?.cashImpactEurOverride === undefined) {
+      if (input.transactionType === 'buy') {
+        cashImpactEur = -(tradedAmountEur + feesAmountEur);
+      } else if (input.transactionType === 'sell') {
+        cashImpactEur = tradedAmountEur - feesAmountEur;
+      } else if (input.transactionType === 'fee') {
+        cashImpactEur = -feesAmountEur;
+      } else {
+        const dividendNet = input.dividendNet ?? 0;
+        cashImpactEur = convertToEur(
+          dividendNet,
+          tradeCurrency,
+          input.fxRateToEur ?? null,
+        );
+      }
+    }
+
+    if (input.transactionType === 'sell') {
+      const [holdingRow] = await withTimedDb('asset_tx_holdings', async () => {
+        return db.execute(sql`
+          select
+            coalesce(sum(case
+              when transaction_type = 'buy' then quantity
+              when transaction_type = 'sell' then -quantity
+              else 0
+            end), 0)::numeric as quantity
+          from finances.asset_transactions
+          where account_id = ${input.accountId}
+            and asset_id = ${input.assetId}
+        `);
+      });
+
+      const availableQuantity = Number(holdingRow?.quantity ?? 0);
+      if (availableQuantity < input.quantity) {
+        throw new ApiHttpError(
+          400,
+          'INSUFFICIENT_ASSET_QUANTITY',
+          `Not enough holdings to sell. Available: ${availableQuantity}`,
+        );
+      }
+    }
+
+    const currentCash = await getAccountCashBalance(input.accountId);
+    if (currentCash === null) {
+      throw new ApiHttpError(
+        404,
+        'ACCOUNT_NOT_FOUND',
+        'Account does not exist',
+      );
+    }
+    if (currentCash + cashImpactEur < 0) {
+      throw new ApiHttpError(
+        400,
+        'INSUFFICIENT_CASH',
+        'Transaction would make account cash balance negative',
+      );
+    }
+
+    const rows = await withTimedDb('create_asset_transaction', async () => {
+      return db
+        .insert(assetTransactions)
+        .values({
+          accountId: input.accountId,
+          assetId: input.assetId,
+          transactionType: input.transactionType,
+          tradedAt: new Date(input.tradedAt),
+          quantity: input.quantity.toString(),
+          unitPrice: input.unitPrice.toString(),
+          tradeCurrency,
+          fxRateToEur:
+            input.fxRateToEur === undefined || input.fxRateToEur === null
+              ? null
+              : input.fxRateToEur.toString(),
+          cashImpactEur: round2(cashImpactEur).toString(),
+          feesAmount: input.feesAmount.toString(),
+          feesCurrency: input.feesAmount > 0 ? feesCurrency : null,
+          dividendGross:
+            input.dividendGross === undefined || input.dividendGross === null
+              ? null
+              : input.dividendGross.toString(),
+          withholdingTax:
+            input.withholdingTax === undefined || input.withholdingTax === null
+              ? null
+              : input.withholdingTax.toString(),
+          dividendNet:
+            input.dividendNet === undefined || input.dividendNet === null
+              ? null
+              : input.dividendNet.toString(),
+          externalReference: input.externalReference ?? null,
+          notes: input.notes ?? null,
+        })
+        .returning();
+    });
+
+    const createdId = rows[0]?.id;
+    if (!createdId) {
+      throw new ApiHttpError(
+        500,
+        'INTERNAL_ERROR',
+        'Failed to create asset transaction',
+      );
+    }
+
+    return serializeAssetTransaction({
+      ...(rows[0] as Record<string, unknown>),
+      assetType: input.assetType,
+    });
+  };
+
   app.get('/finances/accounts', async () => {
     return listAccountsWithCash();
   });
@@ -396,6 +696,24 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     const created = rows.find((row) => row.name === parsed.data.name);
     set.status = 201;
     return created ?? rows[0];
+  });
+
+  app.delete('/finances/accounts/:id', async ({ params, set }) => {
+    const rows = await withTimedDb('delete_account', async () => {
+      return db
+        .delete(accounts)
+        .where(eq(accounts.id, params.id))
+        .returning({ id: accounts.id });
+    });
+    if (rows.length === 0) {
+      throw new ApiHttpError(
+        404,
+        'ACCOUNT_NOT_FOUND',
+        'Account does not exist',
+      );
+    }
+    set.status = 204;
+    return;
   });
 
   app.get('/finances/asset-transactions', async ({ query }) => {
@@ -455,13 +773,51 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       );
     }
 
-    const tradeCurrency = normalizeCurrency(parsed.data.tradeCurrency);
-    const feesCurrency = normalizeCurrency(
-      parsed.data.feesCurrency ?? parsed.data.tradeCurrency,
-    );
+    const created = await createAssetTransactionRecord(parsed.data);
+    set.status = 201;
+    return created;
+  });
+
+  app.delete('/finances/asset-transactions/:id', async ({ params, set }) => {
+    const rows = await withTimedDb('delete_asset_transaction', async () => {
+      return db
+        .delete(assetTransactions)
+        .where(eq(assetTransactions.id, params.id))
+        .returning({ id: assetTransactions.id });
+    });
+    if (rows.length === 0) {
+      throw new ApiHttpError(
+        404,
+        'ASSET_TRANSACTION_NOT_FOUND',
+        'Asset transaction does not exist',
+      );
+    }
+    set.status = 204;
+    return;
+  });
+
+  app.post('/finances/import/degiro-transactions', async ({ body }) => {
+    const parsed = degiroImportRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new ApiHttpError(
+        400,
+        'VALIDATION_ERROR',
+        'Invalid DEGIRO import payload',
+        parsed.error.format(),
+      );
+    }
+
+    const csvBytes = new TextEncoder().encode(parsed.data.csvText).byteLength;
+    if (csvBytes > 5 * 1024 * 1024) {
+      throw new ApiHttpError(
+        400,
+        'CSV_TOO_LARGE',
+        'CSV file is larger than 5MB limit.',
+      );
+    }
 
     const [accountRow] = await withTimedDb(
-      'asset_tx_account_exists',
+      'degiro_import_account_exists',
       async () => {
         return db
           .select({ id: accounts.id })
@@ -477,146 +833,340 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       );
     }
 
-    const [assetRow] = await withTimedDb('asset_tx_asset_exists', async () => {
-      return db
-        .select({ id: assets.id, assetType: assets.assetType })
-        .from(assets)
-        .where(eq(assets.id, parsed.data.assetId));
-    });
-    if (!assetRow) {
-      throw new ApiHttpError(404, 'ASSET_NOT_FOUND', 'Asset does not exist');
-    }
-    if (assetRow.assetType !== parsed.data.assetType) {
-      throw new ApiHttpError(
-        400,
-        'ASSET_TYPE_MISMATCH',
-        'Selected asset does not match selected asset type',
-      );
-    }
+    const fileHash = await sha256Hex(parsed.data.csvText);
 
-    const tradedAmount = parsed.data.quantity * parsed.data.unitPrice;
-    const tradedAmountEur = convertToEur(
-      tradedAmount,
-      tradeCurrency,
-      parsed.data.fxRateToEur ?? null,
-    );
-    const feesAmountEur = convertToEur(
-      parsed.data.feesAmount,
-      feesCurrency,
-      parsed.data.fxRateToEur ?? null,
+    const [importRun] = await withTimedDb(
+      'degiro_create_import_run',
+      async () => {
+        return db
+          .insert(transactionImports)
+          .values({
+            source: 'degiro',
+            accountId: parsed.data.accountId,
+            filename: parsed.data.fileName,
+            fileHash,
+            dryRun: parsed.data.dryRun,
+          })
+          .returning();
+      },
     );
 
-    let cashImpactEur = 0;
-    if (parsed.data.transactionType === 'buy') {
-      cashImpactEur = -(tradedAmountEur + feesAmountEur);
-    } else if (parsed.data.transactionType === 'sell') {
-      cashImpactEur = tradedAmountEur - feesAmountEur;
-    } else if (parsed.data.transactionType === 'fee') {
-      cashImpactEur = -feesAmountEur;
-    } else {
-      const dividendNet = parsed.data.dividendNet ?? 0;
-      cashImpactEur = convertToEur(
-        dividendNet,
-        tradeCurrency,
-        parsed.data.fxRateToEur ?? null,
-      );
-    }
-
-    if (parsed.data.transactionType === 'sell') {
-      const [holdingRow] = await withTimedDb('asset_tx_holdings', async () => {
-        return db.execute(sql`
-          select
-            coalesce(sum(case
-              when transaction_type = 'buy' then quantity
-              when transaction_type = 'sell' then -quantity
-              else 0
-            end), 0)::numeric as quantity
-          from finances.asset_transactions
-          where account_id = ${parsed.data.accountId}
-            and asset_id = ${parsed.data.assetId}
-        `);
-      });
-
-      const availableQuantity = Number(holdingRow?.quantity ?? 0);
-      if (availableQuantity < parsed.data.quantity) {
-        throw new ApiHttpError(
-          400,
-          'INSUFFICIENT_ASSET_QUANTITY',
-          `Not enough holdings to sell. Available: ${availableQuantity}`,
-        );
-      }
-    }
-
-    const currentCash = await getAccountCashBalance(parsed.data.accountId);
-    if (currentCash === null) {
-      throw new ApiHttpError(
-        404,
-        'ACCOUNT_NOT_FOUND',
-        'Account does not exist',
-      );
-    }
-    if (currentCash + cashImpactEur < 0) {
-      throw new ApiHttpError(
-        400,
-        'INSUFFICIENT_CASH',
-        'Transaction would make account cash balance negative',
-      );
-    }
-
-    const rows = await withTimedDb('create_asset_transaction', async () => {
-      return db
-        .insert(assetTransactions)
-        .values({
-          accountId: parsed.data.accountId,
-          assetId: parsed.data.assetId,
-          transactionType: parsed.data.transactionType,
-          tradedAt: new Date(parsed.data.tradedAt),
-          quantity: parsed.data.quantity.toString(),
-          unitPrice: parsed.data.unitPrice.toString(),
-          tradeCurrency,
-          fxRateToEur:
-            parsed.data.fxRateToEur === undefined ||
-            parsed.data.fxRateToEur === null
-              ? null
-              : parsed.data.fxRateToEur.toString(),
-          cashImpactEur: round2(cashImpactEur).toString(),
-          feesAmount: parsed.data.feesAmount.toString(),
-          feesCurrency: parsed.data.feesAmount > 0 ? feesCurrency : null,
-          dividendGross:
-            parsed.data.dividendGross === undefined ||
-            parsed.data.dividendGross === null
-              ? null
-              : parsed.data.dividendGross.toString(),
-          withholdingTax:
-            parsed.data.withholdingTax === undefined ||
-            parsed.data.withholdingTax === null
-              ? null
-              : parsed.data.withholdingTax.toString(),
-          dividendNet:
-            parsed.data.dividendNet === undefined ||
-            parsed.data.dividendNet === null
-              ? null
-              : parsed.data.dividendNet.toString(),
-          externalReference: parsed.data.externalReference ?? null,
-          notes: parsed.data.notes ?? null,
-        })
-        .returning();
-    });
-
-    const createdId = rows[0]?.id;
-    if (!createdId) {
+    if (!importRun) {
       throw new ApiHttpError(
         500,
         'INTERNAL_ERROR',
-        'Failed to create asset transaction',
+        'Failed to initialize import run',
       );
     }
 
-    set.status = 201;
-    return serializeAssetTransaction({
-      ...(rows[0] as Record<string, unknown>),
-      assetType: parsed.data.assetType,
+    let parsedCsv: ReturnType<typeof parseDegiroTransactionsCsv>;
+    try {
+      parsedCsv = parseDegiroTransactionsCsv(parsed.data.csvText);
+    } catch (error) {
+      await withTimedDb('degiro_import_mark_failed_parse', async () => {
+        return db
+          .update(transactionImports)
+          .set({
+            totalRows: 0,
+            importedRows: 0,
+            skippedRows: 0,
+            failedRows: 1,
+            updatedAt: new Date(),
+          })
+          .where(eq(transactionImports.id, importRun.id));
+      });
+      throw new ApiHttpError(
+        400,
+        'UNSUPPORTED_DEGIRO_CSV',
+        error instanceof Error
+          ? error.message
+          : 'Unsupported DEGIRO CSV format.',
+      );
+    }
+
+    const results: DegiroImportResult['results'] = [];
+    let importedRows = 0;
+    let skippedRows = 0;
+    let failedRows = 0;
+
+    const assetByIsin = new Map<string, { id: string; assetType: AssetType }>();
+    const resolveAsset = async (
+      isin: string,
+      product: string,
+      currency: string,
+    ) => {
+      const cached = assetByIsin.get(isin);
+      if (cached) {
+        return cached;
+      }
+
+      const [existing] = await withTimedDb(
+        'degiro_import_asset_lookup',
+        async () => {
+          return db
+            .select({ id: assets.id, assetType: assets.assetType })
+            .from(assets)
+            .where(eq(assets.isin, isin));
+        },
+      );
+
+      if (existing) {
+        const value = {
+          id: String(existing.id),
+          assetType: String(existing.assetType) as AssetType,
+        };
+        assetByIsin.set(isin, value);
+        return value;
+      }
+
+      if (parsed.data.dryRun) {
+        return null;
+      }
+
+      const guessedAssetType = getDegiroAssetType(product);
+      const ticker = getDegiroTicker(product, isin);
+      const [created] = await withTimedDb(
+        'degiro_import_asset_create',
+        async () => {
+          return db
+            .insert(assets)
+            .values({
+              name: product,
+              assetType: guessedAssetType,
+              ticker,
+              isin,
+              currency,
+              symbol: null,
+              subtype: 'degiro-import',
+              exchange: null,
+              providerSymbol: null,
+              notes: 'Auto-created from DEGIRO CSV import.',
+            })
+            .onConflictDoNothing()
+            .returning({ id: assets.id, assetType: assets.assetType });
+        },
+      );
+
+      if (created) {
+        const value = {
+          id: String(created.id),
+          assetType: String(created.assetType) as AssetType,
+        };
+        assetByIsin.set(isin, value);
+        return value;
+      }
+
+      const [createdByOther] = await withTimedDb(
+        'degiro_import_asset_lookup_after_create',
+        async () => {
+          return db
+            .select({ id: assets.id, assetType: assets.assetType })
+            .from(assets)
+            .where(eq(assets.isin, isin));
+        },
+      );
+
+      if (!createdByOther) {
+        return null;
+      }
+
+      const value = {
+        id: String(createdByOther.id),
+        assetType: String(createdByOther.assetType) as AssetType,
+      };
+      assetByIsin.set(isin, value);
+      return value;
+    };
+
+    for (const parsedRow of parsedCsv.rows) {
+      if (!parsedRow.normalized || parsedRow.error) {
+        failedRows += 1;
+        results.push({
+          rowNumber: parsedRow.rowNumber,
+          status: 'failed',
+          reason: parsedRow.error ?? 'Invalid row.',
+          externalReference: parsedRow.normalized?.externalReference ?? null,
+          assetId: null,
+          transactionId: null,
+        });
+        continue;
+      }
+
+      const asset = await resolveAsset(
+        parsedRow.normalized.isin,
+        parsedRow.normalized.product,
+        parsedRow.normalized.tradeCurrency,
+      );
+      if (!asset) {
+        failedRows += 1;
+        results.push({
+          rowNumber: parsedRow.rowNumber,
+          status: 'failed',
+          reason: parsed.data.dryRun
+            ? 'Asset not found (dry run does not create placeholders).'
+            : 'Unable to resolve or create asset.',
+          externalReference: parsedRow.normalized.externalReference,
+          assetId: null,
+          transactionId: null,
+        });
+        continue;
+      }
+
+      if (parsedRow.normalized.externalReference) {
+        const [existingTx] = await withTimedDb(
+          'degiro_import_dedupe_ref',
+          async () => {
+            return db
+              .select({ id: assetTransactions.id })
+              .from(assetTransactions)
+              .where(
+                and(
+                  eq(assetTransactions.accountId, parsed.data.accountId),
+                  eq(
+                    assetTransactions.externalReference,
+                    parsedRow.normalized?.externalReference ?? '',
+                  ),
+                ),
+              );
+          },
+        );
+
+        if (existingTx) {
+          skippedRows += 1;
+          results.push({
+            rowNumber: parsedRow.rowNumber,
+            status: 'skipped',
+            reason: 'Duplicate external reference for this account.',
+            externalReference: parsedRow.normalized.externalReference,
+            assetId: asset.id,
+            transactionId: String(existingTx.id),
+          });
+          continue;
+        }
+      }
+
+      const payload: CreateAssetTransactionInput = {
+        accountId: parsed.data.accountId,
+        assetId: asset.id,
+        assetType: asset.assetType,
+        transactionType: parsedRow.normalized.transactionType,
+        tradedAt: parsedRow.normalized.tradedAt,
+        quantity: parsedRow.normalized.quantity,
+        unitPrice: parsedRow.normalized.unitPrice,
+        tradeCurrency: parsedRow.normalized.tradeCurrency,
+        fxRateToEur: parsedRow.normalized.fxRateToEur,
+        feesAmount: parsedRow.normalized.feesAmount,
+        feesCurrency: parsedRow.normalized.feesCurrency,
+        externalReference: parsedRow.normalized.externalReference,
+        notes: `Imported from DEGIRO CSV (${parsed.data.fileName}).`,
+      };
+
+      const validation = createAssetTransactionInputSchema.safeParse(payload);
+      if (!validation.success) {
+        failedRows += 1;
+        results.push({
+          rowNumber: parsedRow.rowNumber,
+          status: 'failed',
+          reason: 'Normalized row failed validation.',
+          externalReference: parsedRow.normalized.externalReference,
+          assetId: asset.id,
+          transactionId: null,
+        });
+        continue;
+      }
+
+      if (parsed.data.dryRun) {
+        skippedRows += 1;
+        results.push({
+          rowNumber: parsedRow.rowNumber,
+          status: 'skipped',
+          reason: 'Dry run: row validated but not inserted.',
+          externalReference: parsedRow.normalized.externalReference,
+          assetId: asset.id,
+          transactionId: null,
+        });
+        continue;
+      }
+
+      try {
+        const created = await createAssetTransactionRecord(validation.data, {
+          cashImpactEurOverride: round2(parsedRow.normalized.totalEur),
+        });
+        importedRows += 1;
+        results.push({
+          rowNumber: parsedRow.rowNumber,
+          status: 'imported',
+          reason: null,
+          externalReference: parsedRow.normalized.externalReference,
+          assetId: asset.id,
+          transactionId: created.id,
+        });
+      } catch (error) {
+        failedRows += 1;
+        results.push({
+          rowNumber: parsedRow.rowNumber,
+          status: 'failed',
+          reason:
+            error instanceof Error
+              ? error.message
+              : 'Failed to create transaction.',
+          externalReference: parsedRow.normalized.externalReference,
+          assetId: asset.id,
+          transactionId: null,
+        });
+      }
+    }
+
+    if (results.length > 0) {
+      await withTimedDb('degiro_import_rows_insert', async () => {
+        return db.insert(transactionImportRows).values(
+          results.map((result) => ({
+            importId: importRun.id,
+            rowNumber: result.rowNumber,
+            status: result.status,
+            errorCode:
+              result.status === 'failed'
+                ? 'ROW_IMPORT_FAILED'
+                : result.status === 'skipped'
+                  ? 'ROW_SKIPPED'
+                  : null,
+            errorMessage: result.reason ?? null,
+            externalReference: result.externalReference ?? null,
+            assetId: result.assetId ?? null,
+            transactionId: result.transactionId ?? null,
+            rawPayload:
+              parsedCsv.rows.find((row) => row.rowNumber === result.rowNumber)
+                ?.raw ?? {},
+          })),
+        );
+      });
+    }
+
+    await withTimedDb('degiro_import_run_finalize', async () => {
+      return db
+        .update(transactionImports)
+        .set({
+          totalRows: parsedCsv.rows.length,
+          importedRows,
+          skippedRows,
+          failedRows,
+          updatedAt: new Date(),
+        })
+        .where(eq(transactionImports.id, importRun.id));
     });
+
+    return {
+      importId: String(importRun.id),
+      source: 'degiro',
+      fileName: parsed.data.fileName,
+      fileHash,
+      dryRun: parsed.data.dryRun,
+      totalRows: parsedCsv.rows.length,
+      importedRows,
+      skippedRows,
+      failedRows,
+      results,
+    } satisfies DegiroImportResult;
   });
 
   app.get('/finances/tax/yearly-summary', async ({ query }) => {
@@ -1031,97 +1581,6 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     return;
   });
 
-  app.get('/finances/portfolio/summary', async () => {
-    const [cashFromAccounts] = await withTimedDb(
-      'portfolio_cash_summary_accounts',
-      async () => {
-        return db.execute(sql`
-          select
-            coalesce(sum(a.opening_balance_eur), 0)::numeric +
-            coalesce(sum(at.cash_impact_eur), 0)::numeric as cash_balance
-          from finances.accounts a
-          left join finances.asset_transactions at on at.account_id = a.id
-        `);
-      },
-    );
-
-    const assetViews = await listAssetViews({ active: true });
-    const pricedAssets = assetViews.filter(
-      (asset) =>
-        asset.currentValue !== null && asset.currentValue !== undefined,
-    );
-    const assetValue = pricedAssets.reduce(
-      (sum, asset) => sum + Number(asset.currentValue ?? 0),
-      0,
-    );
-    const cashBalance = Number(cashFromAccounts?.cash_balance ?? 0);
-    const netWorth = Number((cashBalance + assetValue).toFixed(2));
-
-    const totalsByType = new Map<AssetType, number>();
-    for (const asset of pricedAssets) {
-      const current = totalsByType.get(asset.assetType as AssetType) ?? 0;
-      totalsByType.set(
-        asset.assetType as AssetType,
-        current + Number(asset.currentValue ?? 0),
-      );
-    }
-
-    const allocationByType = [...totalsByType.entries()]
-      .map(([assetType, value]) => ({
-        assetType,
-        value: Number(value.toFixed(2)),
-        percent:
-          assetValue === 0
-            ? 0
-            : Number(((value / assetValue) * 100).toFixed(2)),
-      }))
-      .sort((a, b) => b.value - a.value);
-
-    return {
-      cashBalance: Number(cashBalance.toFixed(2)),
-      assetValue: Number(assetValue.toFixed(2)),
-      netWorth,
-      assetCount: assetViews.filter((asset) => asset.isActive).length,
-      allocationByType,
-    };
-  });
-
-  app.get('/finances/markets/latest', async ({ query }) => {
-    const limitRaw = Number(query.limit ?? 30);
-    const limit = Number.isFinite(limitRaw)
-      ? Math.max(1, Math.min(500, Math.floor(limitRaw)))
-      : 30;
-
-    const rows = await withTimedDb('markets_latest', async () => {
-      return db.execute(sql`
-        with latest as (
-          select distinct on (symbol)
-            symbol,
-            price,
-            priced_at,
-            source
-          from finances.price_history
-          order by symbol, priced_at desc
-        )
-        select
-          symbol,
-          price,
-          priced_at,
-          source
-        from latest
-        order by symbol asc
-        limit ${limit}
-      `);
-    });
-
-    return rows.map((row) => ({
-      symbol: String(row.symbol),
-      price: Number(row.price),
-      pricedAt: toIso(row.priced_at),
-      source: String(row.source),
-    }));
-  });
-
   app.get(
     '/finances/overview',
     async ({ query }): Promise<FinancesOverviewResponse> => {
@@ -1156,7 +1615,11 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         accountIdRaw !== 'all' &&
         !accountRows.some((row) => String(row.id) === accountIdRaw)
       ) {
-        throw new ApiHttpError(404, 'ACCOUNT_NOT_FOUND', 'Account does not exist');
+        throw new ApiHttpError(
+          404,
+          'ACCOUNT_NOT_FOUND',
+          'Account does not exist',
+        );
       }
 
       const selectedAccountId = accountIdRaw;
@@ -1179,9 +1642,11 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
               at.traded_at as "tradedAt",
               at.quantity,
               at.unit_price as "unitPrice",
+              at.trade_currency as "tradeCurrency",
+              at.fx_rate_to_eur as "fxRateToEur",
               at.cash_impact_eur as "cashImpactEur",
               a.name as "assetName",
-              coalesce(a.symbol, a.ticker) as symbol
+              coalesce(a.provider_symbol, a.symbol, a.ticker) as symbol
             from finances.asset_transactions at
             inner join finances.assets a on a.id = at.asset_id
             order by at.traded_at asc
@@ -1195,9 +1660,11 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
             at.traded_at as "tradedAt",
             at.quantity,
             at.unit_price as "unitPrice",
+            at.trade_currency as "tradeCurrency",
+            at.fx_rate_to_eur as "fxRateToEur",
             at.cash_impact_eur as "cashImpactEur",
             a.name as "assetName",
-            coalesce(a.symbol, a.ticker) as symbol
+            coalesce(a.provider_symbol, a.symbol, a.ticker) as symbol
           from finances.asset_transactions at
           inner join finances.assets a on a.id = at.asset_id
           where at.account_id = ${selectedAccountId}
@@ -1210,7 +1677,8 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
           select
             a.id as "assetId",
             a.name as "assetName",
-            coalesce(a.symbol, a.ticker) as symbol,
+            coalesce(a.provider_symbol, a.symbol, a.ticker) as symbol,
+            a.currency as currency,
             ap.manual_price as "manualPrice"
           from finances.assets a
           left join finances.asset_positions ap on ap.asset_id = a.id
@@ -1231,22 +1699,258 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         }
       }
 
-      const allPriceRows = await withTimedDb('overview_prices', async () => {
-        return db.execute(sql`
-          select symbol, priced_at as "pricedAt", price
-          from finances.price_history
-          order by priced_at asc
-        `);
-      });
+      const tx = txRows.map((row) => ({
+        accountId: String(row.accountId),
+        assetId: String(row.assetId),
+        symbol: String(row.symbol),
+        assetName: String(row.assetName),
+        transactionType: String(row.transactionType),
+        tradedAtMs: new Date(String(row.tradedAt)).getTime(),
+        quantity: Number(row.quantity ?? 0),
+        unitPrice: Number(row.unitPrice ?? 0),
+        tradeCurrency: normalizeCurrency(String(row.tradeCurrency ?? 'EUR')),
+        fxRateToEur: toNullableNumber(row.fxRateToEur),
+        cashImpactEur: Number(row.cashImpactEur ?? 0),
+      }));
 
-      const relevantPrices = allPriceRows
-        .filter((row) => symbolSet.has(String(row.symbol)))
+      const assetMetaById = new Map<
+        string,
+        {
+          symbol: string;
+          name: string;
+          currency: string;
+          manualPrice: number | null;
+        }
+      >();
+      for (const row of assetRows) {
+        assetMetaById.set(String(row.assetId), {
+          symbol: String(row.symbol),
+          name: String(row.assetName),
+          currency: normalizeCurrency(String(row.currency ?? 'EUR')),
+          manualPrice:
+            row.manualPrice === null || row.manualPrice === undefined
+              ? null
+              : Number(row.manualPrice),
+        });
+      }
+
+      const txTimestamps = tx
+        .map((row) => row.tradedAtMs)
+        .filter((value) => Number.isFinite(value));
+      const minTransactionTimestampMs =
+        txTimestamps.length === 0 ? null : Math.min(...txTimestamps);
+
+      const symbols = [...symbolSet];
+      let minPriceTimestampMs: number | null = null;
+      let latestPriceTimestampMs: number | null = null;
+      let previousAsOfMs: number | null = null;
+
+      if (symbols.length > 0) {
+        const [priceBounds] = await withTimedDb(
+          'overview_price_bounds',
+          async () => {
+            return db.execute(sql`
+            select
+              min(priced_at) as "minPricedAt",
+              max(priced_at) as "maxPricedAt"
+            from finances.price_history
+            where symbol in (${sql.join(
+              symbols.map((symbol) => sql`${symbol}`),
+              sql`, `,
+            )})
+          `);
+          },
+        );
+
+        const minPriceAt = priceBounds?.minPricedAt;
+        const maxPriceAt = priceBounds?.maxPricedAt;
+        if (minPriceAt) {
+          const minMs = new Date(String(minPriceAt)).getTime();
+          if (Number.isFinite(minMs)) {
+            minPriceTimestampMs = minMs;
+          }
+        }
+        if (maxPriceAt) {
+          const maxMs = new Date(String(maxPriceAt)).getTime();
+          if (Number.isFinite(maxMs)) {
+            latestPriceTimestampMs = maxMs;
+          }
+        }
+
+        const latestPriceTimes = await withTimedDb(
+          'overview_previous_asof',
+          async () => {
+            return db.execute(sql`
+              select distinct priced_at as "pricedAt"
+              from finances.price_history
+              where symbol in (${sql.join(
+                symbols.map((symbol) => sql`${symbol}`),
+                sql`, `,
+              )})
+              order by priced_at desc
+              limit 2
+            `);
+          },
+        );
+
+        const latestTime = latestPriceTimes[0]?.pricedAt;
+        if (latestTime) {
+          const latestTimeMs = new Date(String(latestTime)).getTime();
+          if (Number.isFinite(latestTimeMs)) {
+            latestPriceTimestampMs = latestTimeMs;
+          }
+        }
+
+        const previousTime = latestPriceTimes[1]?.pricedAt;
+        if (previousTime) {
+          const previousTimeMs = new Date(String(previousTime)).getTime();
+          if (Number.isFinite(previousTimeMs)) {
+            previousAsOfMs = previousTimeMs;
+          }
+        }
+      }
+
+      const minTimestampMs =
+        minTransactionTimestampMs === null
+          ? minPriceTimestampMs
+          : minPriceTimestampMs === null
+            ? minTransactionTimestampMs
+            : Math.min(minTransactionTimestampMs, minPriceTimestampMs);
+
+      const usdToEurAt = (tsMs: number): number | null => {
+        if (fxRows.length === 0) return null;
+        let eurusd: number | null = null;
+        for (const point of fxRows) {
+          if (point.pricedAtMs <= tsMs) {
+            eurusd = point.eurusd;
+          } else {
+            break;
+          }
+        }
+        if (eurusd === null) {
+          eurusd = fxRows[0]?.eurusd ?? null;
+        }
+        if (eurusd === null || eurusd <= 0) return null;
+        return 1 / eurusd;
+      };
+
+      const fxRateForAssetAt = (assetId: string, tsMs: number): number => {
+        const meta = assetMetaById.get(assetId);
+        if (!meta || meta.currency === 'EUR') {
+          return 1;
+        }
+
+        if (meta.currency === 'USD') {
+          const marketUsdToEur = usdToEurAt(tsMs);
+          if (marketUsdToEur !== null && marketUsdToEur > 0) {
+            return marketUsdToEur;
+          }
+        }
+
+        let latestBeforeTs: number | null = null;
+        let latestAny: number | null = null;
+        for (const row of tx) {
+          if (row.assetId !== assetId) continue;
+          if (row.tradeCurrency !== meta.currency) continue;
+          if (!row.fxRateToEur || row.fxRateToEur <= 0) continue;
+          latestAny = row.fxRateToEur;
+          if (row.tradedAtMs <= tsMs) {
+            latestBeforeTs = row.fxRateToEur;
+          }
+        }
+
+        const selected = latestBeforeTs ?? latestAny ?? 1;
+        return selected > 0 ? selected : 1;
+      };
+
+      const now = new Date();
+      const rangeStartAnchorMs =
+        range === 'MAX'
+          ? (minTransactionTimestampMs ?? minTimestampMs)
+          : minTimestampMs;
+      const rangeStart = clampRangeStart(range, now, rangeStartAnchorMs);
+      const rangeStartMs = rangeStart.getTime();
+
+      const asOfMs = latestPriceTimestampMs ?? now.getTime();
+
+      const querySymbols = [...new Set([...symbols, EURUSD_FX_SYMBOL])];
+      const priceWindowRows =
+        querySymbols.length === 0
+          ? []
+          : await withTimedDb('overview_prices_window', async () => {
+              return db.execute(sql`
+                select
+                  symbol,
+                  priced_at as "pricedAt",
+                  price,
+                  source
+                from finances.price_history
+                where symbol in (${sql.join(
+                  querySymbols.map((symbol) => sql`${symbol}`),
+                  sql`, `,
+                )})
+                  and priced_at >= ${rangeStart.toISOString()}
+                  and priced_at <= ${new Date(asOfMs).toISOString()}
+                order by priced_at asc
+              `);
+            });
+
+      const priceAnchorRows =
+        querySymbols.length === 0
+          ? []
+          : await withTimedDb('overview_prices_anchor', async () => {
+              return db.execute(sql`
+                select distinct on (symbol)
+                  symbol,
+                  priced_at as "pricedAt",
+                  price,
+                  source
+                from finances.price_history
+                where symbol in (${sql.join(
+                  querySymbols.map((symbol) => sql`${symbol}`),
+                  sql`, `,
+                )})
+                  and priced_at < ${rangeStart.toISOString()}
+                order by symbol, priced_at desc
+              `);
+            });
+
+      const combinedPriceRows = [...priceAnchorRows, ...priceWindowRows];
+
+      const fxRows = combinedPriceRows
+        .filter(
+          (row) =>
+            String(row.symbol) === EURUSD_FX_SYMBOL &&
+            (String(row.source) === 'yahoo_fx' ||
+              String(row.source) === 'yahoo'),
+        )
+        .map((row) => ({
+          pricedAtMs: new Date(String(row.pricedAt)).getTime(),
+          eurusd: Number(row.price),
+        }))
+        .filter((row) => Number.isFinite(row.pricedAtMs) && row.eurusd > 0)
+        .sort((a, b) => a.pricedAtMs - b.pricedAtMs);
+
+      const relevantPrices = combinedPriceRows
+        .filter(
+          (row) =>
+            String(row.symbol) !== EURUSD_FX_SYMBOL &&
+            symbolSet.has(String(row.symbol)),
+        )
         .map((row) => ({
           symbol: String(row.symbol),
           pricedAtMs: new Date(String(row.pricedAt)).getTime(),
           price: Number(row.price),
         }))
         .filter((row) => Number.isFinite(row.pricedAtMs) && row.price > 0);
+
+      const distinctPriceTimes = [
+        ...new Set(
+          relevantPrices
+            .map((row) => row.pricedAtMs)
+            .filter((tsMs) => Number.isFinite(tsMs)),
+        ),
+      ].sort((a, b) => a - b);
 
       const pricesBySymbol = new Map<
         string,
@@ -1260,55 +1964,6 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       for (const list of pricesBySymbol.values()) {
         list.sort((a, b) => a.pricedAtMs - b.pricedAtMs);
       }
-
-      const tx = txRows.map((row) => ({
-        accountId: String(row.accountId),
-        assetId: String(row.assetId),
-        symbol: String(row.symbol),
-        assetName: String(row.assetName),
-        transactionType: String(row.transactionType),
-        tradedAtMs: new Date(String(row.tradedAt)).getTime(),
-        quantity: Number(row.quantity ?? 0),
-        unitPrice: Number(row.unitPrice ?? 0),
-        cashImpactEur: Number(row.cashImpactEur ?? 0),
-      }));
-
-      const assetMetaById = new Map<
-        string,
-        { symbol: string; name: string; manualPrice: number | null }
-      >();
-      for (const row of assetRows) {
-        assetMetaById.set(String(row.assetId), {
-          symbol: String(row.symbol),
-          name: String(row.assetName),
-          manualPrice:
-            row.manualPrice === null || row.manualPrice === undefined
-              ? null
-              : Number(row.manualPrice),
-        });
-      }
-
-      const txTimestamps = tx
-        .map((row) => row.tradedAtMs)
-        .filter((value) => Number.isFinite(value));
-      const priceTimestamps = relevantPrices.map((row) => row.pricedAtMs);
-      const allTimestamps = [...txTimestamps, ...priceTimestamps].sort(
-        (a, b) => a - b,
-      );
-      const minTimestampMs = allTimestamps[0] ?? null;
-      const now = new Date();
-      const rangeStart = clampRangeStart(range, now, minTimestampMs);
-      const rangeStartMs = rangeStart.getTime();
-
-      const latestPriceAt = Math.max(...priceTimestamps, Number.NaN);
-      const hasPriceData = Number.isFinite(latestPriceAt);
-      const asOfMs = hasPriceData ? latestPriceAt : now.getTime();
-
-      const distinctPriceTimes = [...new Set(priceTimestamps)].sort((a, b) => a - b);
-      const previousAsOfMs: number | null =
-        distinctPriceTimes.length > 1
-          ? (distinctPriceTimes[distinctPriceTimes.length - 2] ?? null)
-          : null;
 
       const priceAtOrBefore = (symbol: string, tsMs: number): number | null => {
         const list = pricesBySymbol.get(symbol);
@@ -1353,23 +2008,51 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         return value;
       };
 
-      const portfolioTotalAt = (tsMs: number, fallbackToCurrentPrice: boolean) => {
+      const avgBuyUnitEurAt = (
+        assetId: string,
+        tsMs: number,
+      ): number | null => {
+        let totalQty = 0;
+        let totalCostEur = 0;
+        for (const row of tx) {
+          if (row.assetId !== assetId) continue;
+          if (row.transactionType !== 'buy') continue;
+          if (row.tradedAtMs > tsMs) continue;
+          if (row.quantity <= 0) continue;
+          totalQty += row.quantity;
+          totalCostEur += Math.abs(row.cashImpactEur);
+        }
+        if (totalQty <= 0) {
+          return null;
+        }
+        return totalCostEur / totalQty;
+      };
+
+      const portfolioTotalAt = (
+        tsMs: number,
+        fallbackToCurrentPrice: boolean,
+      ) => {
         const quantities = quantityByAssetAt(tsMs);
         let total = cashAt(tsMs);
         for (const [assetId, quantity] of quantities.entries()) {
           if (quantity <= 0) continue;
           const meta = assetMetaById.get(assetId);
           if (!meta) continue;
-          let unitPrice = priceAtOrBefore(meta.symbol, tsMs);
-          if (
-            unitPrice === null &&
+          let unitPriceEur: number | null = null;
+          const marketUnitPrice = priceAtOrBefore(meta.symbol, tsMs);
+          if (marketUnitPrice !== null) {
+            unitPriceEur = marketUnitPrice * fxRateForAssetAt(assetId, tsMs);
+          } else if (
             fallbackToCurrentPrice &&
-            meta.manualPrice !== null
+            meta.manualPrice !== null &&
+            meta.manualPrice > 0
           ) {
-            unitPrice = meta.manualPrice;
+            unitPriceEur = meta.manualPrice * fxRateForAssetAt(assetId, tsMs);
+          } else {
+            unitPriceEur = avgBuyUnitEurAt(assetId, tsMs);
           }
-          if (unitPrice !== null) {
-            total += quantity * unitPrice;
+          if (unitPriceEur !== null) {
+            total += quantity * unitPriceEur;
           }
         }
         return round2(total);
@@ -1377,7 +2060,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
 
       const totalValue = portfolioTotalAt(asOfMs, true);
       const previousTotalValue =
-        previousAsOfMs === null ? totalValue : portfolioTotalAt(previousAsOfMs, true);
+        previousAsOfMs === null
+          ? totalValue
+          : portfolioTotalAt(previousAsOfMs, true);
       const deltaValue = round2(totalValue - previousTotalValue);
       const deltaPct =
         previousTotalValue === 0
@@ -1404,7 +2089,10 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       const buyStatsByAsset = new Map<string, { qty: number; total: number }>();
       for (const row of tx) {
         if (row.transactionType !== 'buy') continue;
-        const current = buyStatsByAsset.get(row.assetId) ?? { qty: 0, total: 0 };
+        const current = buyStatsByAsset.get(row.assetId) ?? {
+          qty: 0,
+          total: 0,
+        };
         const rowTotal = Math.abs(row.cashImpactEur);
         buyStatsByAsset.set(row.assetId, {
           qty: current.qty + row.quantity,
@@ -1425,29 +2113,48 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
           const avgBuyTotalEur =
             avgBuyUnitEur === null ? null : round2(avgBuyUnitEur * quantity);
 
-          const currentUnit =
-            priceAtOrBefore(meta.symbol, asOfMs) ??
-            meta.manualPrice ??
-            avgBuyUnitEur ??
-            0;
-          const startUnit =
-            priceAtOrBefore(meta.symbol, rangeStartMs) ?? currentUnit;
+          const currentMarketOrManualUnit =
+            priceAtOrBefore(meta.symbol, asOfMs) ?? meta.manualPrice;
+          const startMarketOrManualUnit =
+            priceAtOrBefore(meta.symbol, rangeStartMs) ??
+            currentMarketOrManualUnit;
+          const currentFxToEur = fxRateForAssetAt(assetId, asOfMs);
+          const startFxToEur = fxRateForAssetAt(assetId, rangeStartMs);
+          const currentUnitEur =
+            currentMarketOrManualUnit !== null
+              ? currentMarketOrManualUnit * currentFxToEur
+              : (avgBuyUnitEur ?? 0);
+          const startUnitEur =
+            startMarketOrManualUnit !== null
+              ? startMarketOrManualUnit * startFxToEur
+              : (avgBuyUnitEur ?? currentUnitEur);
+          const currentUnitQuote =
+            currentMarketOrManualUnit !== null
+              ? currentMarketOrManualUnit
+              : avgBuyUnitEur !== null && currentFxToEur > 0
+                ? avgBuyUnitEur / currentFxToEur
+                : (avgBuyUnitEur ?? 0);
 
-          const currentTotal = round2(quantity * currentUnit);
-          const periodPnlValueEur = round2(quantity * (currentUnit - startUnit));
+          const currentTotal = round2(quantity * currentUnitEur);
+          const periodPnlValueEur = round2(
+            quantity * (currentUnitEur - startUnitEur),
+          );
           const periodPnlPct =
-            startUnit <= 0
+            startUnitEur <= 0
               ? 0
-              : round2(((currentUnit - startUnit) / startUnit) * 100);
+              : round2(((currentUnitEur - startUnitEur) / startUnitEur) * 100);
 
           return {
             assetId,
             symbol: meta.symbol,
             name: meta.name,
+            quoteCurrency: meta.currency,
             quantity: round6(quantity),
-            avgBuyUnitEur: avgBuyUnitEur === null ? null : round6(avgBuyUnitEur),
+            currentUnitQuote: round6(currentUnitQuote),
+            avgBuyUnitEur:
+              avgBuyUnitEur === null ? null : round6(avgBuyUnitEur),
             avgBuyTotalEur,
-            currentUnitEur: round6(currentUnit),
+            currentUnitEur: round6(currentUnitEur),
             currentTotalEur: currentTotal,
             periodPnlValueEur,
             periodPnlPct,
@@ -1462,7 +2169,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         accountId: selectedAccountId,
         asOfIso: new Date(asOfMs).toISOString(),
         previousAsOfIso:
-          previousAsOfMs === null ? null : new Date(previousAsOfMs).toISOString(),
+          previousAsOfMs === null
+            ? null
+            : new Date(previousAsOfMs).toISOString(),
         totalValue,
         deltaValue,
         deltaPct,

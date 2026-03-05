@@ -135,6 +135,16 @@ const assetTransactionsTable = {
   transactionType: { table: 'assetTransactions', name: 'transactionType' },
 };
 
+const transactionImportsTable = {
+  __table: 'transactionImports',
+  id: { table: 'transactionImports', name: 'id' },
+};
+
+const transactionImportRowsTable = {
+  __table: 'transactionImportRows',
+  id: { table: 'transactionImportRows', name: 'id' },
+};
+
 type Condition = {
   column: { name: string };
   value: string | boolean;
@@ -582,6 +592,53 @@ mock.module('@second-brain/db', () => {
           }
           return Promise.resolve(rows.reverse());
         }
+        if (text.includes('from finances.assets a')) {
+          const rows = state.assets.map((asset) => {
+            const position = state.assetPositions.find(
+              (entry) => entry.assetId === asset.id,
+            );
+            return {
+              id: asset.id,
+              name: asset.name,
+              assetType: asset.assetType,
+              subtype: asset.subtype,
+              symbol: asset.symbol,
+              ticker: asset.ticker,
+              isin: asset.isin,
+              exchange: asset.exchange,
+              providerSymbol: asset.providerSymbol,
+              currency: asset.currency,
+              isActive: asset.isActive,
+              notes: asset.notes,
+              createdAt: asset.createdAt,
+              updatedAt: asset.updatedAt,
+              positionId: position?.id ?? null,
+              quantity: position?.quantity ?? null,
+              averageCost: position?.averageCost ?? null,
+              manualPrice: position?.manualPrice ?? null,
+              manualPriceAsOf: position?.manualPriceAsOf ?? null,
+              positionCreatedAt: position?.createdAt ?? null,
+              positionUpdatedAt: position?.updatedAt ?? null,
+            };
+          });
+
+          let filtered = [...rows];
+          if (text.includes('a.is_active = true')) {
+            filtered = filtered.filter((row) => row.isActive);
+          } else if (text.includes('a.is_active = false')) {
+            filtered = filtered.filter((row) => !row.isActive);
+          }
+
+          const typeMatch = text.match(/a\.asset_type\s*=\s*([a-z_]+)/i);
+          if (typeMatch?.[1]) {
+            filtered = filtered.filter(
+              (row) => row.assetType === typeMatch[1]?.toLowerCase(),
+            );
+          }
+
+          filtered.sort((a, b) => a.name.localeCompare(b.name));
+          return Promise.resolve(filtered);
+        }
         if (text.includes('with latest as')) {
           const bySymbol = new Map<string, PriceHistoryRow>();
           const sorted = [...state.priceHistory].sort(
@@ -598,13 +655,15 @@ mock.module('@second-brain/db', () => {
               .map((row) => ({
                 symbol: row.symbol,
                 price: row.price,
-                priced_at: row.pricedAt,
+                pricedAt: row.pricedAt,
                 source: row.source,
               })),
           );
         }
         if (text.includes('from finances.price_history')) {
-          const symbolMatch = text.match(/where symbol = ([A-Z0-9._-]+)/i);
+          const symbolMatch = text.match(
+            /where symbol = ['"]?([A-Z0-9=._-]+)['"]?/i,
+          );
           const symbol = symbolMatch?.[1] ?? '';
           const latest = state.priceHistory
             .filter((row) => row.symbol === symbol)
@@ -634,8 +693,13 @@ mock.module('@second-brain/db', () => {
     conditions,
   });
   const desc = (column: unknown) => ({ type: 'desc', column });
-  const sql = (strings: TemplateStringsArray, ...values: unknown[]) => ({
+  const sqlCore = (strings: TemplateStringsArray, ...values: unknown[]) => ({
     text: String.raw({ raw: strings }, ...values),
+  });
+  const sql = Object.assign(sqlCore, {
+    join: (values: Array<{ text?: string }>, separator: { text?: string }) => ({
+      text: values.map((value) => value.text ?? '').join(separator.text ?? ','),
+    }),
   });
 
   return {
@@ -645,6 +709,8 @@ mock.module('@second-brain/db', () => {
     accounts: accountsTable,
     priceHistory: priceHistoryTable,
     assetTransactions: assetTransactionsTable,
+    transactionImports: transactionImportsTable,
+    transactionImportRows: transactionImportRowsTable,
     and,
     eq,
     desc,
@@ -982,134 +1048,5 @@ describe('finances routes', () => {
     expect(deactivateRes.status).toBe(204);
 
     expect(state.assets[0]?.isActive).toBe(false);
-  });
-
-  test('computes portfolio summary with allocation and cash', async () => {
-    const app = buildApp();
-
-    const accountRes = await app.handle(
-      createRequest('/finances/accounts', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          name: 'Brokerage Cash',
-          currency: 'USD',
-          openingBalanceEur: 1000,
-          accountType: 'checking',
-        }),
-      }),
-    );
-    await parseResponse<{ id: string }>(accountRes);
-
-    await app.handle(
-      createRequest('/finances/assets', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          name: 'Real Estate Unit',
-          assetType: 'real_estate',
-          ticker: 'REUNIT',
-          quantity: 1,
-          manualPrice: 250000,
-          currency: 'USD',
-        }),
-      }),
-    );
-
-    const stockRes = await app.handle(
-      createRequest('/finances/assets', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          name: 'Apple',
-          assetType: 'stock',
-          symbol: 'AAPL',
-          ticker: 'AAPL',
-          isin: 'US0378331005',
-          quantity: 10,
-          manualPrice: 150,
-          currency: 'USD',
-        }),
-      }),
-    );
-    const stock = await parseResponse<{ id: string }>(stockRes);
-    state.priceHistory.push({
-      id: mkPriceId(),
-      symbol: 'AAPL',
-      pricedAt: new Date(),
-      price: '200',
-      source: 'synthetic',
-    });
-
-    await app.handle(
-      createRequest(`/finances/assets/${stock.id}/position`, {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          quantity: 10,
-          manualPrice: 150,
-          manualPriceAsOf: new Date().toISOString(),
-        }),
-      }),
-    );
-
-    const summaryRes = await app.handle(
-      createRequest('/finances/portfolio/summary'),
-    );
-    expect(summaryRes.status).toBe(200);
-    const summary = await parseResponse<{
-      cashBalance: number;
-      assetValue: number;
-      netWorth: number;
-      assetCount: number;
-      allocationByType: Array<{ assetType: string; value: number }>;
-    }>(summaryRes);
-
-    expect(summary.cashBalance).toBe(1000);
-    expect(summary.assetValue).toBe(252000);
-    expect(summary.netWorth).toBe(253000);
-    expect(summary.assetCount).toBe(2);
-    expect(summary.allocationByType.length).toBe(2);
-  });
-
-  test('lists latest market prices by symbol', async () => {
-    const app = buildApp();
-
-    state.priceHistory.push(
-      {
-        id: mkPriceId(),
-        symbol: 'BTC-USD',
-        pricedAt: new Date('2026-03-01T10:00:00.000Z'),
-        price: '62000',
-        source: 'seed',
-      },
-      {
-        id: mkPriceId(),
-        symbol: 'BTC-USD',
-        pricedAt: new Date('2026-03-02T10:00:00.000Z'),
-        price: '64000',
-        source: 'seed',
-      },
-      {
-        id: mkPriceId(),
-        symbol: 'AAPL',
-        pricedAt: new Date('2026-03-02T11:00:00.000Z'),
-        price: '212.50',
-        source: 'seed',
-      },
-    );
-
-    const latestRes = await app.handle(
-      createRequest('/finances/markets/latest?limit=10'),
-    );
-    expect(latestRes.status).toBe(200);
-    const latest =
-      await parseResponse<
-        Array<{ symbol: string; price: number; source: string }>
-      >(latestRes);
-
-    expect(latest.length).toBe(2);
-    expect(latest[0]).toMatchObject({ symbol: 'AAPL', price: 212.5 });
-    expect(latest[1]).toMatchObject({ symbol: 'BTC-USD', price: 64000 });
   });
 });

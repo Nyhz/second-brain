@@ -1,7 +1,7 @@
 # ADR 0005: shadcn-style Frontend Foundation
 
 ## Status
-Accepted
+Superseded by ADR 0007
 
 ## Context
 The platform frontend had a custom UI layer (`packages/ui`) with bespoke tokens and component styling (`--sb-*`, `.sb-ui-*`).  

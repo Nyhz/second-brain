@@ -3,7 +3,9 @@ export function EmptyState({ message }: { message: string }) {
 }
 
 export function ErrorState({ message }: { message: string }) {
-  return <p className="px-4 py-2 text-sm font-medium text-destructive">{message}</p>;
+  return (
+    <p className="px-4 py-2 text-sm font-medium text-destructive">{message}</p>
+  );
 }
 
 export function LoadingSkeleton({ lines = 4 }: { lines?: number }) {

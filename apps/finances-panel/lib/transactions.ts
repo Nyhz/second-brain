@@ -12,6 +12,8 @@ export type TransactionFormInput = {
   fxRateToEur: string;
   feesAmount: string;
   feesCurrency: string;
+  dividendGross: string;
+  dividendNet: string;
   notes: string;
 };
 
@@ -30,6 +32,9 @@ export type TransactionFormValidation =
         fxRateToEur?: number | null;
         feesAmount: number;
         feesCurrency?: string | null;
+        dividendGross?: number | null;
+        withholdingTax?: number | null;
+        dividendNet?: number | null;
         notes?: string | null;
       };
     }
@@ -72,6 +77,8 @@ export const validateTransactionForm = (
   const quantity = Number(input.quantity || '0');
   const unitPrice = Number(input.unitPrice || '0');
   const feesAmount = Number(input.feesAmount || '0');
+  const dividendGross = Number(input.dividendGross || '0');
+  const dividendNet = Number(input.dividendNet || '0');
 
   if (
     (input.transactionType === 'buy' || input.transactionType === 'sell') &&
@@ -94,15 +101,29 @@ export const validateTransactionForm = (
     return { ok: false, message: 'Fee amount must be greater than 0.' };
   }
   if (input.transactionType === 'dividend') {
-    return {
-      ok: false,
-      message: 'Dividend transactions are not supported in this app.',
-    };
+    if (!Number.isFinite(dividendGross) || dividendGross <= 0) {
+      return {
+        ok: false,
+        message: 'Gross dividend must be greater than 0.',
+      };
+    }
+    if (!Number.isFinite(dividendNet) || dividendNet <= 0) {
+      return {
+        ok: false,
+        message: 'Net dividend must be greater than 0.',
+      };
+    }
+    if (dividendNet > dividendGross) {
+      return {
+        ok: false,
+        message: 'Net dividend cannot be greater than gross dividend.',
+      };
+    }
   }
 
   const tradeCurrency = input.tradeCurrency.trim().toUpperCase();
-  if (!/^[A-Z]{3}$/.test(tradeCurrency)) {
-    return { ok: false, message: 'Trade currency must be a 3-letter code.' };
+  if (!['EUR', 'USD'].includes(tradeCurrency)) {
+    return { ok: false, message: 'Trade currency must be EUR or USD.' };
   }
 
   const fxRateToEur = parseOptionalNumber(input.fxRateToEur);
@@ -117,6 +138,10 @@ export const validateTransactionForm = (
   if (normalizedFeesCurrency && !/^[A-Z]{3}$/.test(normalizedFeesCurrency)) {
     return { ok: false, message: 'Fee currency must be a 3-letter code.' };
   }
+  const withholdingTax =
+    input.transactionType === 'dividend'
+      ? Number((dividendGross - dividendNet).toFixed(6))
+      : null;
 
   return {
     ok: true,
@@ -126,12 +151,31 @@ export const validateTransactionForm = (
       assetId: input.assetId,
       transactionType: input.transactionType,
       tradedAt: input.tradedAt,
-      quantity: Number.isFinite(quantity) ? quantity : 0,
-      unitPrice: Number.isFinite(unitPrice) ? unitPrice : 0,
+      quantity:
+        input.transactionType === 'dividend'
+          ? 0
+          : Number.isFinite(quantity)
+            ? quantity
+            : 0,
+      unitPrice:
+        input.transactionType === 'dividend'
+          ? 0
+          : Number.isFinite(unitPrice)
+            ? unitPrice
+            : 0,
       tradeCurrency,
       fxRateToEur: fxRateToEur === undefined ? null : fxRateToEur,
-      feesAmount: Number.isFinite(feesAmount) ? feesAmount : 0,
+      feesAmount:
+        input.transactionType === 'dividend'
+          ? 0
+          : Number.isFinite(feesAmount)
+            ? feesAmount
+            : 0,
       feesCurrency: normalizedFeesCurrency || null,
+      dividendGross:
+        input.transactionType === 'dividend' ? dividendGross : null,
+      withholdingTax,
+      dividendNet: input.transactionType === 'dividend' ? dividendNet : null,
       notes: input.notes.trim() ? input.notes.trim() : null,
     },
   };

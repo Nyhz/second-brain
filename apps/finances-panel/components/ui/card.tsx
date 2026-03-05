@@ -5,18 +5,28 @@ type CardProps = {
   title?: string;
   children: ReactNode;
   className?: string;
+  contentClassName?: string;
 };
 
-export function Card({ title, children, className }: CardProps) {
+export function Card({
+  title,
+  children,
+  className,
+  contentClassName,
+}: CardProps) {
   return (
     <section
       className={cn(
-        'rounded-lg border border-border bg-card text-card-foreground shadow-sm',
+        'rounded-xl border border-border/70 bg-card/95 text-card-foreground shadow-sm',
         className,
       )}
     >
-      {title ? <h3 className="px-4 pt-4 text-base font-semibold">{title}</h3> : null}
-      {children}
+      {title ? (
+        <header className="border-b border-border/60 px-5 py-3.5">
+          <h3 className="text-sm font-semibold tracking-tight">{title}</h3>
+        </header>
+      ) : null}
+      <div className={cn('px-5 py-4', contentClassName)}>{children}</div>
     </section>
   );
 }

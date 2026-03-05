@@ -1,9 +1,11 @@
 import type { AssetTransaction } from '@second-brain/types';
-import { tryApi } from './shared';
+import { apiRequest } from '../api';
 
 export const loadTransactionsData = async () => {
-  const rows = await tryApi<AssetTransaction[]>('/finances/asset-transactions');
+  const rows = await apiRequest<AssetTransaction[]>(
+    '/finances/asset-transactions',
+  );
   return {
-    rows: rows ?? [],
+    rows,
   } as const;
 };

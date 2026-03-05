@@ -32,7 +32,7 @@ export type Account = z.infer<typeof accountSchema>;
 
 export const createAccountInputSchema = z.object({
   name: z.string().min(1),
-  currency: z.string().length(3).default('USD'),
+  currency: z.string().length(3).default('EUR'),
   baseCurrency: z.literal('EUR').default('EUR'),
   openingBalanceEur: z.number().nonnegative().default(0),
   accountType: z.enum([
@@ -165,6 +165,41 @@ export type CreateAssetTransactionInput = z.infer<
   typeof createAssetTransactionInputSchema
 >;
 
+export const degiroImportRowResultSchema = z.object({
+  rowNumber: z.number().int().positive(),
+  status: z.enum(['imported', 'skipped', 'failed']),
+  reason: z.string().nullable().optional(),
+  externalReference: z.string().nullable().optional(),
+  assetId: z.string().uuid().nullable().optional(),
+  transactionId: z.string().uuid().nullable().optional(),
+});
+
+export type DegiroImportRowResult = z.infer<typeof degiroImportRowResultSchema>;
+
+export const degiroImportRequestSchema = z.object({
+  accountId: z.string().uuid(),
+  fileName: z.string().trim().min(1),
+  csvText: z.string().trim().min(1),
+  dryRun: z.boolean().default(true),
+});
+
+export type DegiroImportRequest = z.infer<typeof degiroImportRequestSchema>;
+
+export const degiroImportResultSchema = z.object({
+  importId: z.string().uuid(),
+  source: z.literal('degiro'),
+  fileName: z.string(),
+  fileHash: z.string(),
+  dryRun: z.boolean(),
+  totalRows: z.number().int().nonnegative(),
+  importedRows: z.number().int().nonnegative(),
+  skippedRows: z.number().int().nonnegative(),
+  failedRows: z.number().int().nonnegative(),
+  results: z.array(degiroImportRowResultSchema),
+});
+
+export type DegiroImportResult = z.infer<typeof degiroImportResultSchema>;
+
 export const financesSummarySchema = z.object({
   totalBalance: z.number(),
   accountCount: z.number().int(),
@@ -243,7 +278,7 @@ export const createAssetInputSchema = z
     isin: z.string().trim().length(12).optional(),
     exchange: z.string().trim().min(1).optional(),
     providerSymbol: z.string().trim().min(1).optional(),
-    currency: z.string().length(3).default('USD'),
+    currency: z.string().length(3).default('EUR'),
     notes: z.string().trim().min(1).optional(),
     quantity: z.number().positive().default(1),
     averageCost: z.number().nonnegative().optional(),
@@ -343,7 +378,9 @@ export const overviewPositionRowSchema = z.object({
   assetId: z.string().uuid(),
   symbol: z.string().min(1),
   name: z.string().min(1),
+  quoteCurrency: z.string().length(3),
   quantity: z.number(),
+  currentUnitQuote: z.number(),
   avgBuyUnitEur: z.number().nullable(),
   avgBuyTotalEur: z.number().nullable(),
   currentUnitEur: z.number(),

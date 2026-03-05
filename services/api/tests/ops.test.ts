@@ -168,8 +168,9 @@ describe('ops routes', () => {
       }>;
     }>(response);
 
-    const apiPoints = body.services.find((service) => service.service === 'api')
-      ?.points;
+    const apiPoints = body.services.find(
+      (service) => service.service === 'api',
+    )?.points;
     expect(apiPoints).toBeDefined();
     const last = apiPoints?.at(-1);
     expect(last?.hourIso).toBe(previousHour.toISOString());

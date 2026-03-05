@@ -1,6 +1,6 @@
 'use client';
 
-import { cva, type VariantProps } from 'class-variance-authority';
+import { type VariantProps, cva } from 'class-variance-authority';
 import type { ButtonHTMLAttributes } from 'react';
 import { cn } from '../../lib/utils';
 
@@ -12,7 +12,8 @@ const buttonVariants = cva(
         primary: 'bg-primary text-primary-foreground shadow hover:opacity-95',
         secondary:
           'border border-border bg-secondary text-secondary-foreground hover:bg-secondary/85',
-        ghost: 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+        ghost:
+          'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
         danger:
           'bg-destructive text-destructive-foreground shadow-sm hover:opacity-95',
       },
@@ -43,7 +44,11 @@ export function Button({
 }: Props) {
   return (
     <button
-      className={cn(buttonVariants({ variant, size }), fullWidth && 'w-full', className)}
+      className={cn(
+        buttonVariants({ variant, size }),
+        fullWidth && 'w-full',
+        className,
+      )}
       {...props}
     />
   );

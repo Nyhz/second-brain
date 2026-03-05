@@ -11,6 +11,15 @@ import {
 import { registerFinancesRoutes } from './modules/finances/routes';
 import { registerOpsRoutes } from './modules/ops/routes';
 
+const UUID_PATH_SEGMENT_RE =
+  /\/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}(?=\/|$)/gi;
+const NUMERIC_PATH_SEGMENT_RE = /\/\d+(?=\/|$)/g;
+
+const sanitizeMetricsPath = (pathname: string) =>
+  pathname
+    .replace(UUID_PATH_SEGMENT_RE, '/:id')
+    .replace(NUMERIC_PATH_SEGMENT_RE, '/:number');
+
 export const createApiApp = () => {
   const env = loadApiEnv();
   const app = new Elysia();
@@ -19,7 +28,7 @@ export const createApiApp = () => {
     const mutableStore = store as Record<string, unknown>;
     mutableStore.startedAt = performance.now();
     mutableStore.method = request.method;
-    mutableStore.path = new URL(request.url).pathname;
+    mutableStore.path = sanitizeMetricsPath(new URL(request.url).pathname);
   });
 
   app.onAfterHandle(({ set, store }) => {

@@ -1,15 +1,16 @@
 'use client';
 
-import {
-  AppShell,
-  ThemeSelector,
-  type NavItem,
-  SideNav,
-  TopNav,
-} from './ui';
 import { usePathname } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { useThemeMode } from './theme-provider';
+import {
+  AppShell,
+  type NavGroup,
+  type NavItem,
+  SideNav,
+  ThemeSelector,
+  TopNav,
+} from './ui';
 
 const basePath = process.env.NEXT_PUBLIC_BASE_PATH ?? '';
 const withBasePath = (path: string) => {
@@ -22,12 +23,9 @@ const withBasePath = (path: string) => {
 
 const navItems: NavItem[] = [
   { href: withBasePath('/'), label: 'Overview' },
-  { href: withBasePath('/portfolio'), label: 'Portfolio' },
-  { href: withBasePath('/markets'), label: 'Markets' },
   { href: withBasePath('/assets'), label: 'Assets' },
   { href: withBasePath('/accounts'), label: 'Accounts' },
   { href: withBasePath('/transactions'), label: 'Transactions' },
-  { href: withBasePath('/settings'), label: 'Settings' },
 ];
 
 export function LayoutShell({ children }: { children: ReactNode }) {
@@ -40,18 +38,27 @@ export function LayoutShell({ children }: { children: ReactNode }) {
         ? pathname === withBasePath('/')
         : pathname.startsWith(item.href),
   }));
+  const navGroups: NavGroup[] = [
+    {
+      label: 'Overview',
+      items: activeItems.slice(0, 1),
+    },
+    {
+      label: 'Operations',
+      items: activeItems.slice(1),
+    },
+  ];
 
   return (
     <AppShell
       topNav={
         <TopNav
-          title="Second Brain Finances"
-          right={
-            <ThemeSelector value={mode} onChange={setMode} compact />
-          }
+          title="Portfolio Operations"
+          eyebrow="Second Brain Finances"
+          right={<ThemeSelector value={mode} onChange={setMode} compact />}
         />
       }
-      sideNav={<SideNav items={activeItems} />}
+      sideNav={<SideNav groups={navGroups} items={activeItems} />}
     >
       {children}
     </AppShell>

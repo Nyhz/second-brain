@@ -5,11 +5,12 @@ import type {
   ServiceStatus,
   ServiceStatusHistoryResponse,
 } from '@second-brain/types';
-import { Button, Modal } from './ui';
 import { useMemo, useState } from 'react';
+import { Button, Modal } from './ui';
 
 type OperationsStatusProps = {
   initialHistory: ServiceStatusHistoryResponse;
+  errorMessage?: string | null;
 };
 
 const statusClass = (status: ServiceStatus) => {
@@ -32,13 +33,18 @@ const formatDateTime = (value: string) =>
 const formatHour = (value: string) =>
   new Date(value).toISOString().slice(11, 16);
 
-export function OperationsStatus({ initialHistory }: OperationsStatusProps) {
+export function OperationsStatus({
+  initialHistory,
+  errorMessage: historyErrorMessage = null,
+}: OperationsStatusProps) {
   const [isChecking, setIsChecking] = useState(false);
   const [checkNow, setCheckNow] = useState<ServiceCheckNowResponse | null>(
     null,
   );
   const [modalOpen, setModalOpen] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [checkErrorMessage, setCheckErrorMessage] = useState<string | null>(
+    null,
+  );
 
   const latestByService = useMemo(() => {
     return initialHistory.services.map((service) => {
@@ -58,16 +64,14 @@ export function OperationsStatus({ initialHistory }: OperationsStatusProps) {
       const showLabel = index % 3 === 0 || index === points.length - 1;
       return {
         hourIso: point.hourIso,
-        label: showLabel
-          ? formatHour(point.hourIso)
-          : '',
+        label: showLabel ? formatHour(point.hourIso) : '',
       };
     });
   }, [initialHistory]);
 
   const runCheckNow = async () => {
     setIsChecking(true);
-    setErrorMessage(null);
+    setCheckErrorMessage(null);
 
     try {
       const response = await fetch('/api/ops/status/check-now', {
@@ -81,7 +85,9 @@ export function OperationsStatus({ initialHistory }: OperationsStatusProps) {
       setCheckNow(payload);
       setModalOpen(true);
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error));
+      setCheckErrorMessage(
+        error instanceof Error ? error.message : String(error),
+      );
     } finally {
       setIsChecking(false);
     }
@@ -106,7 +112,12 @@ export function OperationsStatus({ initialHistory }: OperationsStatusProps) {
         </Button>
       </div>
 
-      {errorMessage ? <p className="status-error">{errorMessage}</p> : null}
+      {historyErrorMessage ? (
+        <p className="status-error">{historyErrorMessage}</p>
+      ) : null}
+      {checkErrorMessage ? (
+        <p className="status-error">{checkErrorMessage}</p>
+      ) : null}
 
       <div className="status-summary">
         {latestByService.map((service) => (
@@ -193,7 +204,9 @@ export function OperationsStatus({ initialHistory }: OperationsStatusProps) {
                         : 'No HTTP code'}
                     </span>
                     <span>
-                      {result.latencyMs !== null ? `${result.latencyMs}ms` : '-'}
+                      {result.latencyMs !== null
+                        ? `${result.latencyMs}ms`
+                        : '-'}
                     </span>
                   </div>
                 </div>

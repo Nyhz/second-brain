@@ -14,12 +14,17 @@ type ModalProps = {
 
 export function Modal({ open, title, onClose, children, footer }: ModalProps) {
   return (
-    <Dialog.Root open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
+    <Dialog.Root
+      open={open}
+      onOpenChange={(nextOpen) => !nextOpen && onClose()}
+    >
       <Dialog.Portal>
         <Dialog.Overlay className="fixed inset-0 z-50 bg-black/65 backdrop-blur-sm" />
         <Dialog.Content className="fixed left-1/2 top-1/2 z-50 w-[min(680px,92vw)] -translate-x-1/2 -translate-y-1/2 rounded-lg border border-border bg-card p-0 text-card-foreground shadow-xl">
           <header className="flex items-center justify-between border-b border-border px-5 py-4">
-            <Dialog.Title className="text-base font-semibold">{title}</Dialog.Title>
+            <Dialog.Title className="text-base font-semibold">
+              {title}
+            </Dialog.Title>
             <Dialog.Close asChild>
               <button
                 type="button"
@@ -30,9 +35,13 @@ export function Modal({ open, title, onClose, children, footer }: ModalProps) {
               </button>
             </Dialog.Close>
           </header>
-          <div className="max-h-[70vh] overflow-y-auto px-5 py-4">{children}</div>
+          <div className="max-h-[70vh] overflow-y-auto px-5 py-4">
+            {children}
+          </div>
           {footer ? (
-            <footer className="border-t border-border px-5 py-4">{footer}</footer>
+            <footer className="border-t border-border px-5 py-4">
+              {footer}
+            </footer>
           ) : null}
         </Dialog.Content>
       </Dialog.Portal>

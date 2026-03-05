@@ -1,4 +1,5 @@
 import './globals.css';
+import Script from 'next/script';
 import type { ReactNode } from 'react';
 import { LayoutShell } from '../components/layout-shell';
 import { ThemeProvider } from '../components/theme-provider';
@@ -17,7 +18,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" data-theme="dark" suppressHydrationWarning>
       <body>
-        <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
+        <Script id="finances-theme-boot" strategy="beforeInteractive">
+          {themeBootScript}
+        </Script>
         <ThemeProvider>
           <LayoutShell>{children}</LayoutShell>
         </ThemeProvider>

@@ -1,6 +1,9 @@
 import {
   boolean,
+  date,
   index,
+  integer,
+  jsonb,
   numeric,
   pgSchema,
   text,
@@ -61,6 +64,7 @@ export const priceHistory = financesSchema.table(
     id: uuid('id').defaultRandom().primaryKey(),
     symbol: varchar('symbol', { length: 16 }).notNull(),
     pricedAt: timestamp('priced_at', { withTimezone: true }).notNull(),
+    pricedDateUtc: date('priced_date_utc').notNull(),
     price: numeric('price', { precision: 18, scale: 6 }).notNull(),
     source: varchar('source', { length: 64 }).notNull().default('synthetic'),
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -72,6 +76,9 @@ export const priceHistory = financesSchema.table(
       table.symbol,
       table.pricedAt,
     ),
+    symbolSourceDateUniqueIdx: uniqueIndex(
+      'price_history_symbol_source_priced_date_uidx',
+    ).on(table.symbol, table.source, table.pricedDateUtc),
   }),
 );
 
@@ -87,7 +94,7 @@ export const assets = financesSchema.table(
     isin: varchar('isin', { length: 12 }).notNull(),
     exchange: varchar('exchange', { length: 64 }),
     providerSymbol: varchar('provider_symbol', { length: 64 }),
-    currency: varchar('currency', { length: 3 }).notNull().default('USD'),
+    currency: varchar('currency', { length: 3 }).notNull().default('EUR'),
     isActive: boolean('is_active').notNull().default(true),
     notes: text('notes'),
     createdAt: timestamp('created_at', { withTimezone: true })
@@ -158,6 +165,78 @@ export const assetTransactions = financesSchema.table(
     typeTradedIdx: index('asset_transactions_type_traded_idx').on(
       table.transactionType,
       table.tradedAt,
+    ),
+    accountExternalRefUniqueIdx: uniqueIndex(
+      'asset_transactions_account_external_reference_uidx',
+    ).on(table.accountId, table.externalReference),
+  }),
+);
+
+export const transactionImports = financesSchema.table(
+  'transaction_imports',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    source: varchar('source', { length: 32 }).notNull(),
+    accountId: uuid('account_id')
+      .notNull()
+      .references(() => accounts.id, { onDelete: 'cascade' }),
+    filename: text('filename').notNull(),
+    fileHash: varchar('file_hash', { length: 64 }).notNull(),
+    dryRun: boolean('dry_run').notNull().default(true),
+    totalRows: integer('total_rows').notNull().default(0),
+    importedRows: integer('imported_rows').notNull().default(0),
+    skippedRows: integer('skipped_rows').notNull().default(0),
+    failedRows: integer('failed_rows').notNull().default(0),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    accountCreatedIdx: index('transaction_imports_account_created_idx').on(
+      table.accountId,
+      table.createdAt,
+    ),
+    fileHashIdx: index('transaction_imports_file_hash_idx').on(table.fileHash),
+  }),
+);
+
+export const transactionImportRows = financesSchema.table(
+  'transaction_import_rows',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    importId: uuid('import_id')
+      .notNull()
+      .references(() => transactionImports.id, { onDelete: 'cascade' }),
+    rowNumber: integer('row_number').notNull(),
+    status: varchar('status', { length: 16 }).notNull(),
+    errorCode: varchar('error_code', { length: 64 }),
+    errorMessage: text('error_message'),
+    externalReference: text('external_reference'),
+    assetId: uuid('asset_id').references(() => assets.id, {
+      onDelete: 'set null',
+    }),
+    transactionId: uuid('transaction_id').references(
+      () => assetTransactions.id,
+      {
+        onDelete: 'set null',
+      },
+    ),
+    rawPayload: jsonb('raw_payload').$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    importRowIdx: index('transaction_import_rows_import_row_idx').on(
+      table.importId,
+      table.rowNumber,
+    ),
+    importStatusIdx: index('transaction_import_rows_import_status_idx').on(
+      table.importId,
+      table.status,
     ),
   }),
 );

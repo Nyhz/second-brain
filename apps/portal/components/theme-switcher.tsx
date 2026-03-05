@@ -1,7 +1,7 @@
 'use client';
 
-import { ThemeSelector } from './ui';
 import { useEffect, useState } from 'react';
+import { ThemeSelector } from './ui';
 
 type ThemeMode = 'dark' | 'light';
 

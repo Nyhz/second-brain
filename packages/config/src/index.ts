@@ -23,6 +23,31 @@ const workerSchema = baseSchema.extend({
     .int()
     .positive()
     .default(86400),
+  PRICE_SYNC_ENABLED: z.coerce.boolean().default(true),
+  PRICE_SYNC_TICK_SECONDS: z.coerce.number().int().positive().default(900),
+  PRICE_SYNC_TARGET_HOUR_UTC: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(23)
+    .default(22),
+  PRICE_SYNC_TARGET_MINUTE_UTC: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(59)
+    .default(30),
+  PRICE_SYNC_REQUEST_DELAY_MS: z.coerce
+    .number()
+    .int()
+    .nonnegative()
+    .default(700),
+  PRICE_SYNC_BACKFILL_DAYS_PER_RUN: z.coerce
+    .number()
+    .int()
+    .positive()
+    .default(365),
+  PRICE_SYNC_LOOKBACK_DAYS: z.coerce.number().int().positive().default(7),
   SERVICE_HEALTH_INTERVAL_SECONDS: z.coerce
     .number()
     .int()

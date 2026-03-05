@@ -1,4 +1,5 @@
 import './globals.css';
+import Script from 'next/script';
 import type { ReactNode } from 'react';
 
 const themeBootScript = `(() => {
@@ -15,7 +16,9 @@ export default function RootLayout({ children }: { children: ReactNode }) {
   return (
     <html lang="en" data-theme="dark" suppressHydrationWarning>
       <body>
-        <script dangerouslySetInnerHTML={{ __html: themeBootScript }} />
+        <Script id="portal-theme-boot" strategy="beforeInteractive">
+          {themeBootScript}
+        </Script>
         {children}
       </body>
     </html>

@@ -4,7 +4,6 @@ export * from './card';
 export * from './data-table';
 export * from './kpi-card';
 export * from './modal';
-export * from './page-tabs';
 export * from './side-nav';
 export * from './states';
 export * from './theme-selector';

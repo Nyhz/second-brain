@@ -1,9 +1,58 @@
 import { loadWorkerEnv } from '@second-brain/config';
+import { createDbClient } from '@second-brain/db';
 import { checkServiceHealth } from './jobs/check-service-health';
 import { computeDailyBalances } from './jobs/compute-balances';
 import { snapshotAssetValuations } from './jobs/snapshot-asset-valuations';
+import { syncYahooPrices } from './jobs/sync-yahoo-prices';
 import { runWithAdvisoryLock } from './lib/jobs';
 import { log } from './lib/logger';
+
+const startOfUtcDay = (date: Date) =>
+  new Date(
+    Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()),
+  );
+
+const addUtcDays = (date: Date, days: number) => {
+  const out = new Date(date);
+  out.setUTCDate(out.getUTCDate() + days);
+  return out;
+};
+
+const shouldRunToday = (
+  now: Date,
+  targetHourUtc: number,
+  targetMinuteUtc: number,
+) => {
+  const nowMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const targetMinutes = targetHourUtc * 60 + targetMinuteUtc;
+  return nowMinutes >= targetMinutes;
+};
+
+const hasSuccessfulRunInUtcDay = async (
+  databaseUrl: string,
+  jobName: string,
+  now: Date,
+) => {
+  const dayStart = startOfUtcDay(now);
+  const nextDayStart = addUtcDays(dayStart, 1);
+  const { sql } = createDbClient(databaseUrl);
+
+  try {
+    const [row] = await sql`
+      select exists (
+        select 1
+        from core.job_runs
+        where job_name = ${jobName}
+          and status = 'success'::job_run_status
+          and started_at >= ${dayStart.toISOString()}
+          and started_at < ${nextDayStart.toISOString()}
+      ) as "hasRun"
+    `;
+    return Boolean(row?.hasRun);
+  } finally {
+    await sql.end();
+  }
+};
 
 export const startScheduler = () => {
   const env = loadWorkerEnv();
@@ -56,9 +105,49 @@ export const startScheduler = () => {
     }
   };
 
+  const runYahooPriceSyncJob = async () => {
+    if (!env.PRICE_SYNC_ENABLED) {
+      return;
+    }
+
+    const now = new Date();
+    if (
+      !shouldRunToday(
+        now,
+        env.PRICE_SYNC_TARGET_HOUR_UTC,
+        env.PRICE_SYNC_TARGET_MINUTE_UTC,
+      )
+    ) {
+      return;
+    }
+
+    const jobName = 'finances_sync_yahoo_prices_daily';
+    try {
+      const alreadyRun = await hasSuccessfulRunInUtcDay(
+        env.DATABASE_URL,
+        jobName,
+        now,
+      );
+      if (alreadyRun) {
+        return;
+      }
+
+      await runWithAdvisoryLock(env.DATABASE_URL, jobName, now, () =>
+        syncYahooPrices(env.DATABASE_URL, {
+          requestDelayMs: env.PRICE_SYNC_REQUEST_DELAY_MS,
+          backfillDaysPerRun: env.PRICE_SYNC_BACKFILL_DAYS_PER_RUN,
+          lookbackDays: env.PRICE_SYNC_LOOKBACK_DAYS,
+        }),
+      );
+    } catch (error) {
+      log('error', 'yahoo_price_sync_job_failed', { error: String(error) });
+    }
+  };
+
   void runBalanceJob();
   void runAssetSnapshotJob();
   void runServiceHealthJob();
+  void runYahooPriceSyncJob();
 
   const balanceTimer = setInterval(() => {
     void runBalanceJob();
@@ -72,9 +161,14 @@ export const startScheduler = () => {
     void runServiceHealthJob();
   }, env.SERVICE_HEALTH_INTERVAL_SECONDS * 1000);
 
+  const yahooPriceSyncTimer = setInterval(() => {
+    void runYahooPriceSyncJob();
+  }, env.PRICE_SYNC_TICK_SECONDS * 1000);
+
   return () => {
     clearInterval(balanceTimer);
     clearInterval(assetSnapshotTimer);
     clearInterval(serviceHealthTimer);
+    clearInterval(yahooPriceSyncTimer);
   };
 };

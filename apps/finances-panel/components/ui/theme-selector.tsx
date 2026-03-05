@@ -30,7 +30,8 @@ export function ThemeSelector({
   }
 
   return (
-    <div className="flex gap-2" role="group" aria-label="Theme mode">
+    <fieldset className="flex gap-2" aria-label="Theme mode">
+      <legend className="sr-only">Theme mode</legend>
       <button
         type="button"
         className={cn(
@@ -55,6 +56,6 @@ export function ThemeSelector({
       >
         Light
       </button>
-    </div>
+    </fieldset>
   );
 }

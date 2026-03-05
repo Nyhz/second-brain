@@ -14,8 +14,8 @@ const { sql } = createDbClient(databaseUrl);
 await sql`
   insert into finances.accounts (name, currency, account_type)
   values
-    ('Main Checking', 'USD', 'checking'),
-    ('Cash Wallet', 'USD', 'cash')
+    ('Main Broker', 'EUR', 'brokerage'),
+    ('Savings Reserve', 'EUR', 'savings')
   on conflict do nothing
 `;
 
