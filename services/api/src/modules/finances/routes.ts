@@ -37,11 +37,7 @@ import {
 import type { Elysia } from 'elysia';
 import { withTimedDb } from '../../lib/db-timed';
 import { ApiHttpError } from '../../lib/errors';
-import {
-  getDegiroAssetType,
-  getDegiroTicker,
-  parseDegiroTransactionsCsv,
-} from './degiro-import';
+import { parseDegiroTransactionsCsv } from './degiro-import';
 import {
   type DegiroAccountStatementRow,
   type DegiroAccountStatementRowType,
@@ -188,6 +184,8 @@ const serializeAssetTransaction = (
 const round2 = (value: number) => Number(value.toFixed(2));
 const EURUSD_FX_SYMBOL = 'EURUSD=X';
 const RETURN_PCT_MIN_BASELINE_EUR = 1;
+const INVESTMENT_ACCOUNT_TYPES = new Set(['brokerage', 'crypto_exchange']);
+const SAVINGS_ACCOUNT_TYPE = 'savings';
 
 const OVERVIEW_RANGES: OverviewRange[] = ['1W', '1M', 'YTD', '1Y', 'MAX'];
 
@@ -197,6 +195,14 @@ const UUID_RE =
 const round6 = (value: number) => Number(value.toFixed(6));
 const DEGIRO_ACCOUNT_STATEMENT_SOURCE = 'degiro_account_statement';
 const DEGIRO_TRANSACTIONS_SOURCE = 'degiro';
+
+const isInvestmentAccountType = (accountType: string | null | undefined) =>
+  accountType !== null &&
+  accountType !== undefined &&
+  INVESTMENT_ACCOUNT_TYPES.has(accountType);
+
+const isSavingsAccountType = (accountType: string | null | undefined) =>
+  accountType === SAVINGS_ACCOUNT_TYPE;
 
 type ImportMovementTable = 'asset_transaction' | 'cash_movement';
 
@@ -498,18 +504,13 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
           a.created_at as "createdAt",
           a.updated_at as "updatedAt",
           (
-            a.opening_balance_eur +
-            coalesce(at_sum.asset_cash_impact_eur, 0) +
-            coalesce(acm_sum.cash_movement_impact_eur, 0)
+            case
+              when a.account_type = ${SAVINGS_ACCOUNT_TYPE}
+                then a.opening_balance_eur + coalesce(acm_sum.cash_movement_impact_eur, 0)
+              else 0
+            end
           )::numeric as "currentCashBalanceEur"
         from finances.accounts a
-        left join (
-          select
-            account_id,
-            coalesce(sum(cash_impact_eur), 0)::numeric as asset_cash_impact_eur
-          from finances.asset_transactions
-          group by account_id
-        ) at_sum on at_sum.account_id = a.id
         left join (
           select
             account_id,
@@ -541,19 +542,13 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         select
           a.id,
           (
-            a.opening_balance_eur +
-            coalesce(at_sum.asset_cash_impact_eur, 0) +
-            coalesce(acm_sum.cash_movement_impact_eur, 0)
+            case
+              when a.account_type = ${SAVINGS_ACCOUNT_TYPE}
+                then a.opening_balance_eur + coalesce(acm_sum.cash_movement_impact_eur, 0)
+              else 0
+            end
           )::numeric as cash_balance
         from finances.accounts a
-        left join (
-          select
-            account_id,
-            coalesce(sum(cash_impact_eur), 0)::numeric as asset_cash_impact_eur
-          from finances.asset_transactions
-          where account_id = ${accountId}
-          group by account_id
-        ) at_sum on at_sum.account_id = a.id
         left join (
           select
             account_id,
@@ -593,7 +588,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       'asset_tx_account_exists',
       async () => {
         return db
-          .select({ id: accounts.id })
+          .select({ id: accounts.id, accountType: accounts.accountType })
           .from(accounts)
           .where(eq(accounts.id, input.accountId));
       },
@@ -603,6 +598,13 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         404,
         'ACCOUNT_NOT_FOUND',
         'Account does not exist',
+      );
+    }
+    if (!isInvestmentAccountType(String(accountRow.accountType))) {
+      throw new ApiHttpError(
+        400,
+        'ACCOUNT_TYPE_NOT_SUPPORTED',
+        'Asset transactions are only supported for brokerage and exchange accounts.',
       );
     }
 
@@ -677,24 +679,6 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
           400,
           'INSUFFICIENT_ASSET_QUANTITY',
           `Not enough holdings to sell. Available: ${availableQuantity}`,
-        );
-      }
-    }
-
-    if (!options?.skipCashBalanceValidation) {
-      const currentCash = await getAccountCashBalance(input.accountId);
-      if (currentCash === null) {
-        throw new ApiHttpError(
-          404,
-          'ACCOUNT_NOT_FOUND',
-          'Account does not exist',
-        );
-      }
-      if (currentCash + cashImpactEur < 0) {
-        throw new ApiHttpError(
-          400,
-          'INSUFFICIENT_CASH',
-          'Transaction would make account cash balance negative',
         );
       }
     }
@@ -1025,13 +1009,18 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       );
     }
 
+    const accountType = parsed.data.accountType;
+    const openingBalanceEur = isSavingsAccountType(accountType)
+      ? parsed.data.openingBalanceEur
+      : 0;
+
     await withTimedDb('create_account', async () => {
       return db.insert(accounts).values({
         name: parsed.data.name,
-        currency: normalizeCurrency(parsed.data.currency),
+        currency: 'EUR',
         baseCurrency: 'EUR',
-        openingBalanceEur: parsed.data.openingBalanceEur.toString(),
-        accountType: parsed.data.accountType,
+        openingBalanceEur: openingBalanceEur.toString(),
+        accountType,
       });
     });
 
@@ -1302,7 +1291,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       'degiro_import_account_exists',
       async () => {
         return db
-          .select({ id: accounts.id })
+          .select({ id: accounts.id, accountType: accounts.accountType })
           .from(accounts)
           .where(eq(accounts.id, parsed.data.accountId));
       },
@@ -1312,6 +1301,13 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         404,
         'ACCOUNT_NOT_FOUND',
         'Account does not exist',
+      );
+    }
+    if (!isInvestmentAccountType(String(accountRow.accountType))) {
+      throw new ApiHttpError(
+        400,
+        'IMPORT_ACCOUNT_TYPE_NOT_SUPPORTED',
+        'DEGIRO transactions import is only supported for brokerage and exchange accounts.',
       );
     }
 
@@ -1370,95 +1366,60 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     let importedRows = 0;
     let skippedRows = 0;
     let failedRows = 0;
-
+    const normalizedRows = parsedCsv.rows.filter(
+      (row) => row.normalized !== null && row.error === null,
+    );
+    const uniqueIsins = [
+      ...new Set(normalizedRows.map((row) => row.normalized!.isin)),
+    ];
     const assetByIsin = new Map<string, { id: string; assetType: AssetType }>();
-    const resolveAsset = async (
-      isin: string,
-      product: string,
-      currency: string,
-    ) => {
-      const cached = assetByIsin.get(isin);
-      if (cached) {
-        return cached;
-      }
-
-      const [existing] = await withTimedDb(
-        'degiro_import_asset_lookup',
+    if (uniqueIsins.length > 0) {
+      const existingAssets = await withTimedDb(
+        'degiro_import_asset_lookup_by_isin',
         async () => {
           return db
-            .select({ id: assets.id, assetType: assets.assetType })
-            .from(assets)
-            .where(eq(assets.isin, isin));
-        },
-      );
-
-      if (existing) {
-        const value = {
-          id: String(existing.id),
-          assetType: String(existing.assetType) as AssetType,
-        };
-        assetByIsin.set(isin, value);
-        return value;
-      }
-
-      if (parsed.data.dryRun) {
-        return null;
-      }
-
-      const guessedAssetType = getDegiroAssetType(product);
-      const ticker = getDegiroTicker(product, isin);
-      const [created] = await withTimedDb(
-        'degiro_import_asset_create',
-        async () => {
-          return db
-            .insert(assets)
-            .values({
-              name: product,
-              assetType: guessedAssetType,
-              ticker,
-              isin,
-              currency,
-              symbol: null,
-              subtype: 'degiro-import',
-              exchange: null,
-              providerSymbol: null,
-              notes: 'Auto-created from DEGIRO CSV import.',
+            .select({
+              id: assets.id,
+              isin: assets.isin,
+              assetType: assets.assetType,
             })
-            .onConflictDoNothing()
-            .returning({ id: assets.id, assetType: assets.assetType });
-        },
-      );
-
-      if (created) {
-        const value = {
-          id: String(created.id),
-          assetType: String(created.assetType) as AssetType,
-        };
-        assetByIsin.set(isin, value);
-        return value;
-      }
-
-      const [createdByOther] = await withTimedDb(
-        'degiro_import_asset_lookup_after_create',
-        async () => {
-          return db
-            .select({ id: assets.id, assetType: assets.assetType })
             .from(assets)
-            .where(eq(assets.isin, isin));
+            .where(
+              sql`${assets.isin} in (${sql.join(
+                uniqueIsins.map((isin) => sql`${isin}`),
+                sql`, `,
+              )})`,
+            );
         },
       );
-
-      if (!createdByOther) {
-        return null;
+      for (const row of existingAssets) {
+        assetByIsin.set(String(row.isin), {
+          id: String(row.id),
+          assetType: String(row.assetType) as AssetType,
+        });
       }
-
-      const value = {
-        id: String(createdByOther.id),
-        assetType: String(createdByOther.assetType) as AssetType,
-      };
-      assetByIsin.set(isin, value);
-      return value;
-    };
+    }
+    const missingIsins = uniqueIsins.filter((isin) => !assetByIsin.has(isin));
+    if (missingIsins.length > 0) {
+      await withTimedDb('degiro_import_mark_failed_unknown_isin', async () => {
+        return db
+          .update(transactionImports)
+          .set({
+            totalRows: parsedCsv.rows.length,
+            importedRows: 0,
+            skippedRows: 0,
+            failedRows: parsedCsv.rows.length,
+            updatedAt: new Date(),
+          })
+          .where(eq(transactionImports.id, importRun.id));
+      });
+      throw new ApiHttpError(
+        400,
+        'UNKNOWN_ISIN',
+        `Unknown ISINs in import: ${missingIsins.join(', ')}`,
+        { missingIsins },
+      );
+    }
 
     for (const parsedRow of parsedCsv.rows) {
       if (!parsedRow.normalized || parsedRow.error) {
@@ -1474,19 +1435,13 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         continue;
       }
 
-      const asset = await resolveAsset(
-        parsedRow.normalized.isin,
-        parsedRow.normalized.product,
-        parsedRow.normalized.tradeCurrency,
-      );
+      const asset = assetByIsin.get(parsedRow.normalized.isin) ?? null;
       if (!asset) {
         failedRows += 1;
         results.push({
           rowNumber: parsedRow.rowNumber,
           status: 'failed',
-          reason: parsed.data.dryRun
-            ? 'Asset not found (dry run does not create placeholders).'
-            : 'Unable to resolve or create asset.',
+          reason: `Unknown ISIN: ${parsedRow.normalized.isin}`,
           externalReference: parsedRow.normalized.externalReference,
           assetId: null,
           transactionId: null,
@@ -3278,7 +3233,11 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
 
       const accountRows = await withTimedDb('overview_accounts', async () => {
         return db.execute(sql`
-          select id, name, opening_balance_eur as "openingBalanceEur"
+          select
+            id,
+            name,
+            account_type as "accountType",
+            opening_balance_eur as "openingBalanceEur"
           from finances.accounts
           order by name asc
         `);
@@ -3296,16 +3255,36 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       }
 
       const selectedAccountId = accountIdRaw;
-      const filteredAccountRows =
+      const selectedAccount =
         selectedAccountId === 'all'
-          ? accountRows
-          : accountRows.filter((row) => String(row.id) === selectedAccountId);
-      const openingCash = filteredAccountRows.reduce(
+          ? null
+          : accountRows.find((row) => String(row.id) === selectedAccountId) ??
+            null;
+      const selectedAccountType =
+        selectedAccount === null ? null : String(selectedAccount.accountType);
+      const includeInvestmentData =
+        selectedAccountId === 'all' ||
+        isInvestmentAccountType(selectedAccountType);
+      const includeSavingsCashData =
+        selectedAccountId === 'all' || isSavingsAccountType(selectedAccountType);
+
+      const filteredSavingsRows =
+        selectedAccountId === 'all'
+          ? accountRows.filter((row) =>
+              isSavingsAccountType(String(row.accountType)),
+            )
+          : selectedAccount && isSavingsAccountType(String(selectedAccount.accountType))
+            ? [selectedAccount]
+            : [];
+      const openingCash = filteredSavingsRows.reduce(
         (sum, row) => sum + Number(row.openingBalanceEur ?? 0),
         0,
       );
 
       const txRows = await withTimedDb('overview_transactions', async () => {
+        if (!includeInvestmentData) {
+          return [];
+        }
         if (selectedAccountId === 'all') {
           return db.execute(sql`
             select
@@ -3321,7 +3300,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
               a.name as "assetName",
               coalesce(a.provider_symbol, a.symbol, a.ticker) as symbol
             from finances.asset_transactions at
+            inner join finances.accounts acc on acc.id = at.account_id
             inner join finances.assets a on a.id = at.asset_id
+            where acc.account_type in ('brokerage', 'crypto_exchange')
             order by at.traded_at asc
           `);
         }
@@ -3348,6 +3329,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       const cashMovementRows = await withTimedDb(
         'overview_cash_movements',
         async () => {
+          if (!includeSavingsCashData) {
+            return [];
+          }
           if (selectedAccountId === 'all') {
             return db.execute(sql`
               select
@@ -3355,8 +3339,10 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
                 occurred_at as "occurredAt",
                 movement_type as "movementType",
                 cash_impact_eur as "cashImpactEur"
-              from finances.account_cash_movements
+              from finances.account_cash_movements acm
+              inner join finances.accounts a on a.id = acm.account_id
               where affects_cash_balance = true
+                and a.account_type = ${SAVINGS_ACCOUNT_TYPE}
               order by occurred_at asc
             `);
           }
@@ -3392,11 +3378,6 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
 
       const symbolSet = new Set<string>();
       for (const row of txRows) {
-        if (row.symbol) {
-          symbolSet.add(String(row.symbol));
-        }
-      }
-      for (const row of assetRows) {
         if (row.symbol) {
           symbolSet.add(String(row.symbol));
         }
@@ -3726,11 +3707,6 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
 
       const cashAt = (tsMs: number) => {
         let value = openingCash;
-        for (const row of tx) {
-          if (row.tradedAtMs <= tsMs) {
-            value += row.cashImpactEur;
-          }
-        }
         for (const row of cashMovements) {
           if (row.occurredAtMs <= tsMs) {
             value += row.cashImpactEur;
@@ -3800,27 +3776,94 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         rangePointTimes.push(asOfMs);
       }
 
-      const series = rangePointTimes.map((tsMs) => ({
-        tsIso: new Date(tsMs).toISOString(),
-        value: portfolioTotalAt(tsMs, true),
+      const valuationSeries = rangePointTimes.map((tsMs) => ({
+        tsMs,
+        totalValue: portfolioTotalAt(tsMs, true),
       }));
       const totalValue =
-        series[series.length - 1]?.value ?? portfolioTotalAt(asOfMs, true);
-      const baselineTotalValue = series[0]?.value ?? totalValue;
-      const deltaValue = round2(totalValue - baselineTotalValue);
-      const firstMeaningfulSeriesValue = series.find(
-        (point) => Math.abs(point.value) >= RETURN_PCT_MIN_BASELINE_EUR,
-      )?.value;
-      const pctDenominator =
-        Math.abs(baselineTotalValue) >= RETURN_PCT_MIN_BASELINE_EUR
-          ? Math.abs(baselineTotalValue)
-          : firstMeaningfulSeriesValue !== undefined
-            ? Math.abs(firstMeaningfulSeriesValue)
-            : 0;
-      const deltaPct =
-        pctDenominator === 0
-          ? 0
-          : round2((deltaValue / pctDenominator) * 100);
+        valuationSeries[valuationSeries.length - 1]?.totalValue ??
+        portfolioTotalAt(asOfMs, true);
+      const baselineTotalValue = valuationSeries[0]?.totalValue ?? totalValue;
+
+      const flowEvents = [
+        ...tx
+          .filter(
+            (row) =>
+              row.transactionType === 'buy' || row.transactionType === 'sell',
+          )
+          .map((row) => ({
+            tsMs: row.tradedAtMs,
+            // Investment account cash is not part of overview valuation, so
+            // trades are normalized as external flows.
+            amount: -row.cashImpactEur,
+          })),
+        ...cashMovements.map((row) => ({
+          tsMs: row.occurredAtMs,
+          amount: row.cashImpactEur,
+        })),
+      ]
+        .filter(
+          (event) =>
+            Number.isFinite(event.tsMs) && Number.isFinite(event.amount),
+        )
+        .sort((a, b) => a.tsMs - b.tsMs);
+
+      let flowCursor = 0;
+      let cumulativeNetFlow = 0;
+      let cumulativeReturnFactor = 1;
+      const series = valuationSeries.map((point, index) => {
+        if (index === 0) {
+          return {
+            tsIso: new Date(point.tsMs).toISOString(),
+            marketIndex: 100,
+            totalValue: point.totalValue,
+          };
+        }
+
+        const prevPoint = valuationSeries[index - 1];
+        if (!prevPoint) {
+          return {
+            tsIso: new Date(point.tsMs).toISOString(),
+            marketIndex: 100,
+            totalValue: point.totalValue,
+          };
+        }
+        let intervalFlow = 0;
+        while (flowCursor < flowEvents.length) {
+          const event = flowEvents[flowCursor];
+          if (!event || event.tsMs > point.tsMs) {
+            break;
+          }
+          if (event.tsMs > prevPoint.tsMs) {
+            intervalFlow += event.amount;
+          }
+          flowCursor += 1;
+        }
+        cumulativeNetFlow += intervalFlow;
+
+        const prevTotal = prevPoint.totalValue;
+        let intervalReturn = 0;
+        if (Math.abs(prevTotal) >= RETURN_PCT_MIN_BASELINE_EUR) {
+          intervalReturn = (point.totalValue - prevTotal - intervalFlow) / prevTotal;
+          if (!Number.isFinite(intervalReturn)) {
+            intervalReturn = 0;
+          }
+        }
+        cumulativeReturnFactor *= 1 + intervalReturn;
+        if (!Number.isFinite(cumulativeReturnFactor)) {
+          cumulativeReturnFactor = 1;
+        }
+
+        return {
+          tsIso: new Date(point.tsMs).toISOString(),
+          marketIndex: round6(cumulativeReturnFactor * 100),
+          totalValue: point.totalValue,
+        };
+      });
+
+      const finalMarketIndex = series[series.length - 1]?.marketIndex ?? 100;
+      const deltaValue = round2(totalValue - baselineTotalValue - cumulativeNetFlow);
+      const deltaPct = round2(finalMarketIndex - 100);
 
       const currentQuantities = quantityByAssetAt(asOfMs);
       const buyStatsByAsset = new Map<string, { qty: number; total: number }>();
@@ -3924,12 +3967,11 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
   app.get('/finances/summary', async () => {
     const [result] = await withTimedDb('finances_summary', async () => {
       return db.execute(sql`
-        with account_cash as (
+        with savings_cash as (
           select
             coalesce(
               sum(
                 a.opening_balance_eur +
-                coalesce(at_sum.asset_cash_impact_eur, 0) +
                 coalesce(acm_sum.cash_movement_impact_eur, 0)
               ),
               0
@@ -3938,44 +3980,38 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
           left join (
             select
               account_id,
-              coalesce(sum(cash_impact_eur), 0)::numeric as asset_cash_impact_eur
-            from finances.asset_transactions
-            group by account_id
-          ) at_sum on at_sum.account_id = a.id
-          left join (
-            select
-              account_id,
               coalesce(sum(cash_impact_eur), 0)::numeric as cash_movement_impact_eur
             from finances.account_cash_movements
             where affects_cash_balance = true
             group by account_id
           ) acm_sum on acm_sum.account_id = a.id
+          where a.account_type = ${SAVINGS_ACCOUNT_TYPE}
         ),
-        tx as (
+        investment_tx as (
           select
-            coalesce(sum(case when cash_impact_eur > 0 and traded_at >= date_trunc('month', now()) then cash_impact_eur else 0 end), 0)::numeric as monthly_inflow,
-            coalesce(sum(case when cash_impact_eur < 0 and traded_at >= date_trunc('month', now()) then cash_impact_eur else 0 end), 0)::numeric as monthly_outflow,
             count(*)::int as transaction_count
           from finances.asset_transactions
         ),
-        cash_tx as (
+        savings_cash_tx as (
           select
             coalesce(sum(case when cash_impact_eur > 0 and occurred_at >= date_trunc('month', now()) and affects_cash_balance then cash_impact_eur else 0 end), 0)::numeric as monthly_inflow,
             coalesce(sum(case when cash_impact_eur < 0 and occurred_at >= date_trunc('month', now()) and affects_cash_balance then cash_impact_eur else 0 end), 0)::numeric as monthly_outflow,
             count(*)::int as transaction_count
-          from finances.account_cash_movements
+          from finances.account_cash_movements acm
+          inner join finances.accounts a on a.id = acm.account_id
+          where a.account_type = ${SAVINGS_ACCOUNT_TYPE}
         ),
         ac as (
           select count(*)::int as account_count
           from finances.accounts
         )
         select
-          account_cash.total_balance,
-          (tx.monthly_inflow + cash_tx.monthly_inflow)::numeric as monthly_inflow,
-          (tx.monthly_outflow + cash_tx.monthly_outflow)::numeric as monthly_outflow,
-          (tx.transaction_count + cash_tx.transaction_count)::int as transaction_count,
+          savings_cash.total_balance,
+          savings_cash_tx.monthly_inflow::numeric as monthly_inflow,
+          savings_cash_tx.monthly_outflow::numeric as monthly_outflow,
+          (investment_tx.transaction_count + savings_cash_tx.transaction_count)::int as transaction_count,
           ac.account_count
-        from account_cash, tx, cash_tx, ac
+        from savings_cash, investment_tx, savings_cash_tx, ac
       `);
     });
     const safeResult = result ?? {

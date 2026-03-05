@@ -5,8 +5,7 @@ import type {
   AssetTransactionType,
   AssetType,
   AssetWithPosition,
-  DegiroAccountStatementAnalyzeResult,
-  DegiroAccountStatementImportResult,
+  DegiroImportResult,
   UnifiedTransactionRow,
 } from '@second-brain/types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -54,14 +53,6 @@ type TaxSummary = {
   realizedGainLossEur: number;
 };
 
-type UnresolvedAssetDraft = {
-  isin: string;
-  name: string;
-  symbol: string;
-  currency: string;
-  assetType: AssetType;
-};
-
 const txTypes: AssetTransactionType[] = ['buy', 'sell', 'fee', 'dividend'];
 const v1AssetTypes: AssetType[] = [
   'stock',
@@ -98,15 +89,8 @@ const prettyTxType = (row: UnifiedTransactionRow) => {
   return row.movementType ?? 'cash_movement';
 };
 
-const unresolvedToDraft = (
-  row: DegiroAccountStatementAnalyzeResult['unresolvedAssets'][number],
-): UnresolvedAssetDraft => ({
-  isin: row.isin,
-  name: row.name,
-  symbol: row.symbolHint ?? row.isin.slice(-6),
-  currency: row.currencyHint,
-  assetType: row.typeHint,
-});
+const isInvestmentAccount = (accountType: string) =>
+  accountType === 'brokerage' || accountType === 'crypto_exchange';
 
 export function TransactionsFeature() {
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -119,9 +103,7 @@ export function TransactionsFeature() {
   >(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
-  const [isAnalyzingImport, setIsAnalyzingImport] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  const [isCreatingMissingAsset, setIsCreatingMissingAsset] = useState(false);
   const [isTaxLoading, setIsTaxLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [taxSummary, setTaxSummary] = useState<TaxSummary | null>(null);
@@ -130,13 +112,9 @@ export function TransactionsFeature() {
   const [importAccountId, setImportAccountId] = useState('');
   const [importDryRun, setImportDryRun] = useState(true);
   const [importFile, setImportFile] = useState<File | null>(null);
-  const [importCsvText, setImportCsvText] = useState<string | null>(null);
-  const [analyzeResult, setAnalyzeResult] =
-    useState<DegiroAccountStatementAnalyzeResult | null>(null);
-  const [importResult, setImportResult] =
-    useState<DegiroAccountStatementImportResult | null>(null);
-  const [unresolvedDraft, setUnresolvedDraft] =
-    useState<UnresolvedAssetDraft | null>(null);
+  const [importResult, setImportResult] = useState<DegiroImportResult | null>(
+    null,
+  );
 
   const [form, setForm] = useState<TransactionFormInput>(initialForm());
 
@@ -152,13 +130,6 @@ export function TransactionsFeature() {
       setAccounts(accountsData.rows);
       setAssets(assetsData.rows);
       setRows(transactionsData.rows);
-
-      const defaultAccountId = accountsData.rows[0]?.id ?? '';
-      setForm((current) => ({
-        ...current,
-        accountId: current.accountId || defaultAccountId,
-      }));
-      setImportAccountId((current) => current || defaultAccountId);
       setErrorMessage(null);
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
@@ -166,6 +137,28 @@ export function TransactionsFeature() {
       setIsLoading(false);
     }
   }, []);
+
+  const investmentAccounts = useMemo(
+    () => accounts.filter((account) => isInvestmentAccount(account.accountType)),
+    [accounts],
+  );
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  useEffect(() => {
+    const defaultAccountId = investmentAccounts[0]?.id ?? '';
+    if (!investmentAccounts.some((account) => account.id === form.accountId)) {
+      setForm((current) => ({
+        ...current,
+        accountId: defaultAccountId,
+      }));
+    }
+    if (!investmentAccounts.some((account) => account.id === importAccountId)) {
+      setImportAccountId(defaultAccountId);
+    }
+  }, [form.accountId, importAccountId, investmentAccounts]);
 
   const loadTaxSummary = useCallback(async () => {
     setIsTaxLoading(true);
@@ -187,10 +180,6 @@ export function TransactionsFeature() {
   }, [taxYear]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
-
-  useEffect(() => {
     void loadTaxSummary();
   }, [loadTaxSummary]);
 
@@ -208,11 +197,6 @@ export function TransactionsFeature() {
       }));
     }
   }, [filteredAssets, form.assetId]);
-
-  const selectedAccount = useMemo(
-    () => accounts.find((account) => account.id === form.accountId) ?? null,
-    [accounts, form.accountId],
-  );
 
   const cashImpactPreview = useMemo(() => {
     const quantity = Number(form.quantity || '0');
@@ -315,16 +299,13 @@ export function TransactionsFeature() {
   const onImportFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const next = event.target.files?.[0] ?? null;
     setImportFile(next);
-    setImportCsvText(null);
-    setAnalyzeResult(null);
     setImportResult(null);
-    setUnresolvedDraft(null);
   };
 
-  const runAnalyze = async (event: FormEvent<HTMLFormElement>) => {
+  const runImport = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!importAccountId) {
-      setErrorMessage('Select an account before importing.');
+      setErrorMessage('Select an investment account before importing.');
       return;
     }
     if (!importFile) {
@@ -336,110 +317,17 @@ export function TransactionsFeature() {
       return;
     }
 
-    setIsAnalyzingImport(true);
+    setIsImporting(true);
     try {
       const csvText = await importFile.text();
-      setImportCsvText(csvText);
-      const result = await apiRequest<DegiroAccountStatementAnalyzeResult>(
-        '/finances/import/degiro-account-statement/analyze',
+      const result = await apiRequest<DegiroImportResult>(
+        '/finances/import/degiro-transactions',
         {
           method: 'POST',
           body: JSON.stringify({
             accountId: importAccountId,
             fileName: importFile.name,
             csvText,
-          }),
-        },
-      );
-      setAnalyzeResult(result);
-      setImportResult(null);
-      setUnresolvedDraft(
-        result.unresolvedAssets[0]
-          ? unresolvedToDraft(result.unresolvedAssets[0])
-          : null,
-      );
-      setErrorMessage(null);
-    } catch (error) {
-      setErrorMessage(getApiErrorMessage(error));
-    } finally {
-      setIsAnalyzingImport(false);
-    }
-  };
-
-  const createMissingAsset = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!unresolvedDraft) {
-      return;
-    }
-
-    setIsCreatingMissingAsset(true);
-    try {
-      const symbol = unresolvedDraft.symbol.trim().toUpperCase();
-      const ticker = symbol || unresolvedDraft.isin.slice(-6);
-      await apiRequest('/finances/assets', {
-        method: 'POST',
-        body: JSON.stringify({
-          name: unresolvedDraft.name.trim(),
-          assetType: unresolvedDraft.assetType,
-          symbol: symbol || undefined,
-          ticker,
-          isin: unresolvedDraft.isin.trim().toUpperCase(),
-          currency: unresolvedDraft.currency.trim().toUpperCase(),
-          quantity: 1,
-          providerSymbol: symbol || undefined,
-        }),
-      });
-
-      await load();
-      setErrorMessage(null);
-
-      if (importCsvText && importFile) {
-        const refreshed = await apiRequest<DegiroAccountStatementAnalyzeResult>(
-          '/finances/import/degiro-account-statement/analyze',
-          {
-            method: 'POST',
-            body: JSON.stringify({
-              accountId: importAccountId,
-              fileName: importFile.name,
-              csvText: importCsvText,
-            }),
-          },
-        );
-        setAnalyzeResult(refreshed);
-        setUnresolvedDraft(
-          refreshed.unresolvedAssets[0]
-            ? unresolvedToDraft(refreshed.unresolvedAssets[0])
-            : null,
-        );
-      }
-    } catch (error) {
-      setErrorMessage(getApiErrorMessage(error));
-    } finally {
-      setIsCreatingMissingAsset(false);
-    }
-  };
-
-  const commitImport = async () => {
-    if (!importAccountId || !importFile || !importCsvText) {
-      setErrorMessage('Run analyze first before importing.');
-      return;
-    }
-
-    if ((analyzeResult?.unresolvedAssets.length ?? 0) > 0) {
-      setErrorMessage('Create all unresolved assets before committing import.');
-      return;
-    }
-
-    setIsImporting(true);
-    try {
-      const result = await apiRequest<DegiroAccountStatementImportResult>(
-        '/finances/import/degiro-account-statement',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            accountId: importAccountId,
-            fileName: importFile.name,
-            csvText: importCsvText,
             dryRun: importDryRun,
           }),
         },
@@ -492,7 +380,7 @@ export function TransactionsFeature() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Transactions</h1>
           <p className="text-sm text-muted-foreground">
-            Register operations and import DEGIRO account statements.
+            Register operations and import DEGIRO transactions CSV.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -650,9 +538,9 @@ export function TransactionsFeature() {
               required
             >
               <option value="">Select account</option>
-              {accounts.map((account) => (
+              {investmentAccounts.map((account) => (
                 <option key={account.id} value={account.id}>
-                  {account.name} ({formatMoney(account.currentCashBalanceEur)})
+                  {account.name}
                 </option>
               ))}
             </select>
@@ -929,9 +817,6 @@ export function TransactionsFeature() {
             {Number.isFinite(cashImpactPreview)
               ? formatMoney(cashImpactPreview)
               : 'requires FX'}
-            {selectedAccount
-              ? ` · Account cash: ${formatMoney(selectedAccount.currentCashBalanceEur)}`
-              : ''}
           </p>
 
           <Button type="submit" variant="primary" disabled={isSaving} fullWidth>
@@ -942,14 +827,14 @@ export function TransactionsFeature() {
 
       <Modal
         open={isImportModalOpen}
-        title="Import DEGIRO Account Statement CSV"
+        title="Import DEGIRO Transactions CSV"
         onClose={() => {
-          if (!isImporting && !isAnalyzingImport && !isCreatingMissingAsset) {
+          if (!isImporting) {
             setIsImportModalOpen(false);
           }
         }}
       >
-        <form className="grid gap-4" onSubmit={runAnalyze}>
+        <form className="grid gap-4" onSubmit={runImport}>
           <div className="grid gap-1.5">
             <label className="text-sm font-medium" htmlFor="import-account">
               Account
@@ -961,10 +846,10 @@ export function TransactionsFeature() {
               onChange={(event) => setImportAccountId(event.target.value)}
               required
             >
-              <option value="">Select account</option>
-              {accounts.map((account) => (
+              <option value="">Select investment account</option>
+              {investmentAccounts.map((account) => (
                 <option key={account.id} value={account.id}>
-                  {account.name} ({formatMoney(account.currentCashBalanceEur)})
+                  {account.name}
                 </option>
               ))}
             </select>
@@ -984,197 +869,28 @@ export function TransactionsFeature() {
             />
           </div>
 
-          <Button
-            type="submit"
-            variant="secondary"
-            disabled={isAnalyzingImport}
-            fullWidth
-          >
-            {isAnalyzingImport ? 'Analyzing...' : 'Analyze CSV'}
+          <label className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={importDryRun}
+              onChange={(event) => setImportDryRun(event.target.checked)}
+            />
+            Dry run (validate and persist import report without inserts)
+          </label>
+
+          <Button type="submit" variant="primary" disabled={isImporting} fullWidth>
+            {isImporting
+              ? 'Importing...'
+              : importDryRun
+                ? 'Run Dry Import'
+                : 'Import to DB'}
           </Button>
         </form>
-
-        {analyzeResult ? (
-          <div className="mt-4 space-y-4">
-            <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
-              <span className="rounded-full border border-border/70 bg-muted px-2.5 py-1">
-                Ready: {analyzeResult.totals.readyRows}
-              </span>
-              <span className="rounded-full border border-border/70 bg-muted px-2.5 py-1">
-                Unresolved: {analyzeResult.totals.unresolvedRows}
-              </span>
-              <span className="rounded-full border border-border/70 bg-muted px-2.5 py-1">
-                Failed: {analyzeResult.totals.failedRows}
-              </span>
-              <span className="rounded-full border border-border/70 bg-muted px-2.5 py-1">
-                Delta EUR: {formatMoney(analyzeResult.totals.deltaEur)}
-              </span>
-            </div>
-
-            {analyzeResult.unresolvedAssets.length > 0 ? (
-              <Card title="Unresolved Assets">
-                <div className="space-y-3">
-                  <p className="text-xs text-muted-foreground">
-                    Create missing assets before committing import.
-                  </p>
-                  <div className="space-y-1 text-xs text-muted-foreground">
-                    {analyzeResult.unresolvedAssets.map((asset) => (
-                      <button
-                        key={asset.isin}
-                        type="button"
-                        className="block rounded-md border border-border/70 px-2 py-1 text-left hover:bg-muted"
-                        onClick={() => setUnresolvedDraft(unresolvedToDraft(asset))}
-                      >
-                        {asset.isin} · {asset.name}
-                      </button>
-                    ))}
-                  </div>
-
-                  {unresolvedDraft ? (
-                    <form className="grid gap-2" onSubmit={createMissingAsset}>
-                      <div className="grid gap-1.5 sm:grid-cols-2 sm:gap-3">
-                        <div className="grid gap-1.5">
-                          <label className="text-xs font-medium">Name</label>
-                          <input
-                            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-                            value={unresolvedDraft.name}
-                            onChange={(event) =>
-                              setUnresolvedDraft((current) =>
-                                current
-                                  ? { ...current, name: event.target.value }
-                                  : current,
-                              )
-                            }
-                          />
-                        </div>
-                        <div className="grid gap-1.5">
-                          <label className="text-xs font-medium">ISIN</label>
-                          <input
-                            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-                            value={unresolvedDraft.isin}
-                            onChange={(event) =>
-                              setUnresolvedDraft((current) =>
-                                current
-                                  ? {
-                                      ...current,
-                                      isin: event.target.value.toUpperCase(),
-                                    }
-                                  : current,
-                              )
-                            }
-                          />
-                        </div>
-                      </div>
-
-                      <div className="grid gap-1.5 sm:grid-cols-3 sm:gap-3">
-                        <div className="grid gap-1.5">
-                          <label className="text-xs font-medium">Symbol</label>
-                          <input
-                            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-                            value={unresolvedDraft.symbol}
-                            onChange={(event) =>
-                              setUnresolvedDraft((current) =>
-                                current
-                                  ? {
-                                      ...current,
-                                      symbol: event.target.value.toUpperCase(),
-                                    }
-                                  : current,
-                              )
-                            }
-                          />
-                        </div>
-                        <div className="grid gap-1.5">
-                          <label className="text-xs font-medium">Currency</label>
-                          <input
-                            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-                            value={unresolvedDraft.currency}
-                            onChange={(event) =>
-                              setUnresolvedDraft((current) =>
-                                current
-                                  ? {
-                                      ...current,
-                                      currency: event.target.value.toUpperCase(),
-                                    }
-                                  : current,
-                              )
-                            }
-                          />
-                        </div>
-                        <div className="grid gap-1.5">
-                          <label className="text-xs font-medium">Type</label>
-                          <select
-                            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-                            value={unresolvedDraft.assetType}
-                            onChange={(event) =>
-                              setUnresolvedDraft((current) =>
-                                current
-                                  ? {
-                                      ...current,
-                                      assetType: event.target.value as AssetType,
-                                    }
-                                  : current,
-                              )
-                            }
-                          >
-                            {v1AssetTypes.map((type) => (
-                              <option key={type} value={type}>
-                                {prettyAssetType(type)}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
-                      </div>
-
-                      <Button
-                        type="submit"
-                        variant="secondary"
-                        disabled={isCreatingMissingAsset}
-                        fullWidth
-                      >
-                        {isCreatingMissingAsset
-                          ? 'Creating...'
-                          : 'Create Missing Asset'}
-                      </Button>
-                    </form>
-                  ) : null}
-                </div>
-              </Card>
-            ) : (
-              <label className="inline-flex items-center gap-2 text-sm text-muted-foreground">
-                <input
-                  type="checkbox"
-                  checked={importDryRun}
-                  onChange={(event) => setImportDryRun(event.target.checked)}
-                />
-                Dry run (validate and persist import report without inserts)
-              </label>
-            )}
-
-            <Button
-              type="button"
-              variant="primary"
-              disabled={
-                isImporting ||
-                analyzeResult.unresolvedAssets.length > 0 ||
-                !importCsvText
-              }
-              onClick={() => void commitImport()}
-              fullWidth
-            >
-              {isImporting
-                ? 'Importing...'
-                : importDryRun
-                  ? 'Run Dry Import'
-                  : 'Import to DB'}
-            </Button>
-          </div>
-        ) : null}
 
         {importResult ? (
           <div className="mt-4 space-y-3">
             <p className="text-xs text-muted-foreground">
-              Source: DEGIRO Account Statement ·{' '}
+              Source: DEGIRO Transactions ·{' '}
               {importResult.dryRun ? 'Dry run' : 'Committed'} · Rows{' '}
               {importResult.totalRows}
             </p>
@@ -1188,12 +904,6 @@ export function TransactionsFeature() {
               <span className="rounded-full border border-border/70 bg-muted px-2.5 py-1">
                 Failed: {importResult.failedRows}
               </span>
-              <span className="rounded-full border border-border/70 bg-muted px-2.5 py-1">
-                Linked Fees: {importResult.linkedFeeRows}
-              </span>
-              <span className="rounded-full border border-border/70 bg-muted px-2.5 py-1">
-                Delta EUR: {formatMoney(importResult.deltaEur)}
-              </span>
             </div>
             {failedImportRows.length > 0 ? (
               <div>
@@ -1203,8 +913,7 @@ export function TransactionsFeature() {
                 <ul className="list-disc space-y-0.5 pl-5 text-xs text-muted-foreground">
                   {failedImportRows.map((row) => (
                     <li key={`${row.rowNumber}-${row.reason ?? ''}`}>
-                      Row {row.rowNumber} ({row.rowType}):{' '}
-                      {row.reason ?? 'Unknown failure'}
+                      Row {row.rowNumber}: {row.reason ?? 'Unknown failure'}
                     </li>
                   ))}
                 </ul>

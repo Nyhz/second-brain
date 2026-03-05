@@ -100,6 +100,7 @@ const now = () => new Date();
 const accountsTable = {
   __table: 'accounts',
   id: { table: 'accounts', name: 'id' },
+  accountType: { table: 'accounts', name: 'accountType' },
   createdAt: { table: 'accounts', name: 'createdAt' },
 };
 
@@ -172,23 +173,11 @@ const filterRows = <
 };
 
 const makeSummary = () => {
-  const monthStart = new Date();
-  monthStart.setDate(1);
-  monthStart.setHours(0, 0, 0, 0);
-
-  const opening = state.accounts.reduce(
-    (sum, account) => sum + Number(account.openingBalanceEur),
-    0,
-  );
-  const impacts = state.assetTransactions.map((tx) => Number(tx.cashImpactEur));
-  const totalBalance =
-    opening + impacts.reduce((sum, amount) => sum + amount, 0);
-  const monthlyInflow = state.assetTransactions
-    .filter((tx) => tx.tradedAt >= monthStart && Number(tx.cashImpactEur) > 0)
-    .reduce((sum, tx) => sum + Number(tx.cashImpactEur), 0);
-  const monthlyOutflow = state.assetTransactions
-    .filter((tx) => tx.tradedAt >= monthStart && Number(tx.cashImpactEur) < 0)
-    .reduce((sum, tx) => sum + Number(tx.cashImpactEur), 0);
+  const totalBalance = state.accounts
+    .filter((account) => account.accountType === 'savings')
+    .reduce((sum, account) => sum + Number(account.openingBalanceEur), 0);
+  const monthlyInflow = 0;
+  const monthlyOutflow = 0;
 
   return {
     total_balance: totalBalance,
@@ -321,7 +310,12 @@ mock.module('@second-brain/db', () => {
 
             const mapped =
               selection && table.__table === 'accounts'
-                ? rows.map((row) => ({ id: row.id }))
+                ? rows.map((row) => ({
+                    id: row.id,
+                    ...(selection.accountType
+                      ? { accountType: row.accountType }
+                      : {}),
+                  }))
                 : selection && table.__table === 'priceHistory'
                   ? rows.map((row) => ({
                       price: (row as PriceHistoryRow).price,
@@ -560,7 +554,7 @@ mock.module('@second-brain/db', () => {
       },
       execute(query?: { text?: string }) {
         const text = query?.text ?? '';
-        if (text.includes('with account_cash as')) {
+        if (text.includes('with savings_cash as')) {
           return Promise.resolve([makeSummary()]);
         }
         if (text.includes('from finances.accounts a')) {
@@ -575,15 +569,13 @@ mock.module('@second-brain/db', () => {
             createdAt: account.createdAt,
             updatedAt: account.updatedAt,
             currentCashBalanceEur:
-              Number(account.openingBalanceEur) +
-              state.assetTransactions
-                .filter((tx) => tx.accountId === account.id)
-                .reduce((sum, tx) => sum + Number(tx.cashImpactEur), 0),
+              account.accountType === 'savings'
+                ? Number(account.openingBalanceEur)
+                : 0,
             cash_balance:
-              Number(account.openingBalanceEur) +
-              state.assetTransactions
-                .filter((tx) => tx.accountId === account.id)
-                .reduce((sum, tx) => sum + Number(tx.cashImpactEur), 0),
+              account.accountType === 'savings'
+                ? Number(account.openingBalanceEur)
+                : 0,
           }));
           if (text.includes('where a.id')) {
             return Promise.resolve(rows.slice(0, 1));
@@ -773,7 +765,7 @@ describe('finances routes', () => {
           name: 'Main',
           currency: 'USD',
           openingBalanceEur: 150,
-          accountType: 'checking',
+          accountType: 'brokerage',
         }),
       }),
     );
@@ -807,7 +799,7 @@ describe('finances routes', () => {
           name: 'Main',
           currency: 'USD',
           openingBalanceEur: 150,
-          accountType: 'checking',
+          accountType: 'brokerage',
         }),
       }),
     );
@@ -905,7 +897,7 @@ describe('finances routes', () => {
           name: 'Main',
           currency: 'USD',
           openingBalanceEur: 0,
-          accountType: 'checking',
+          accountType: 'brokerage',
         }),
       }),
     );
@@ -994,9 +986,9 @@ describe('finances routes', () => {
 
     expect(summary.accountCount).toBe(1);
     expect(summary.transactionCount).toBe(3);
-    expect(summary.totalBalance).toBe(430);
-    expect(summary.monthlyInflow).toBe(500);
-    expect(summary.monthlyOutflow).toBe(-120);
+    expect(summary.totalBalance).toBe(0);
+    expect(summary.monthlyInflow).toBe(0);
+    expect(summary.monthlyOutflow).toBe(0);
   });
 
   test('creates assets, updates positions, and deactivates assets', async () => {

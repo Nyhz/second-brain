@@ -1,4 +1,5 @@
 import './globals.css';
+import type { Metadata } from 'next';
 import Script from 'next/script';
 import type { ReactNode } from 'react';
 import { LayoutShell } from '../components/layout-shell';
@@ -13,6 +14,13 @@ const themeBootScript = `(() => {
     document.documentElement.setAttribute('data-theme', 'dark');
   }
 })();`;
+
+export const metadata: Metadata = {
+  title: 'SecondBrain | Finances',
+  description:
+    'Internal investment dashboard for portfolio performance, positions, transactions, and assets.',
+  applicationName: 'SecondBrain',
+};
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (

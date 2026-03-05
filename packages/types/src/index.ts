@@ -525,7 +525,8 @@ export type OverviewAccount = z.infer<typeof overviewAccountSchema>;
 
 export const overviewSeriesPointSchema = z.object({
   tsIso: z.string(),
-  value: z.number(),
+  marketIndex: z.number(),
+  totalValue: z.number(),
 });
 export type OverviewSeriesPoint = z.infer<typeof overviewSeriesPointSchema>;
 

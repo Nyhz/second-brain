@@ -15,7 +15,8 @@ import type { TooltipProps } from 'recharts';
 
 type Point = {
   label: string;
-  value: number;
+  marketIndex: number;
+  totalValue: number;
   dateIso?: string;
 };
 const RETURN_PCT_MIN_BASELINE_EUR = 1;
@@ -33,7 +34,7 @@ export function AreaPerformanceChart({
       : undefined;
   const effectiveBaseline =
     baseline ??
-    data.find((point) => Number.isFinite(point.value))?.value ??
+    data.find((point) => Number.isFinite(point.marketIndex))?.marketIndex ??
     undefined;
   const tooltipPctDenominator = useMemo(() => {
     if (
@@ -45,9 +46,9 @@ export function AreaPerformanceChart({
     }
     const firstMeaningful = data.find(
       (point) =>
-        Number.isFinite(point.value) &&
-        Math.abs(point.value) >= RETURN_PCT_MIN_BASELINE_EUR,
-    )?.value;
+        Number.isFinite(point.marketIndex) &&
+        Math.abs(point.marketIndex) >= RETURN_PCT_MIN_BASELINE_EUR,
+    )?.marketIndex;
     return firstMeaningful !== undefined ? Math.abs(firstMeaningful) : undefined;
   }, [data, effectiveBaseline]);
   const niceStep = (rawStep: number) => {
@@ -69,7 +70,7 @@ export function AreaPerformanceChart({
 
   const yAxis = useMemo<{ domain: [number, number]; ticks: number[] }>(() => {
     const values = data
-      .map((point) => point.value)
+      .map((point) => point.marketIndex)
       .filter((value) => Number.isFinite(value));
     if (values.length === 0) {
       return { domain: [0, 1], ticks: [0, 1] };
@@ -108,12 +109,10 @@ export function AreaPerformanceChart({
     return { domain: [minBound, maxBound], ticks };
   }, [data]);
 
-  const formatYAxisTick = (value: number) => {
-    if (Math.abs(value) >= 1_000) {
-      return `${Math.round(value / 1_000)}k`;
-    }
-    return String(Math.round(value));
-  };
+  const formatYAxisTick = (value: number) =>
+    effectiveBaseline !== undefined && Number.isFinite(effectiveBaseline)
+      ? `${Math.round(value - effectiveBaseline)}%`
+      : `${Math.round(value)}%`;
 
   const formatTooltipDate = (dateIso?: string, fallbackLabel?: string) => {
     if (typeof dateIso === 'string' && dateIso.length >= 10) {
@@ -152,11 +151,11 @@ export function AreaPerformanceChart({
     if (!active || !payload || payload.length === 0) return null;
     const pointPayload = payload[0];
     const point = pointPayload?.payload as Point | undefined;
-    const value =
+    const marketIndex =
       typeof pointPayload?.value === 'number'
         ? pointPayload.value
         : Number.NaN;
-    if (!point || !Number.isFinite(value)) return null;
+    if (!point || !Number.isFinite(marketIndex)) return null;
 
     return (
       <div className="rounded-md border border-border/70 bg-card/95 px-3 py-2 shadow-sm">
@@ -164,10 +163,10 @@ export function AreaPerformanceChart({
           {formatTooltipDate(point.dateIso, point.label)}
         </p>
         <p className="text-sm font-semibold text-foreground">
-          {formatTooltipMoney(value)}
+          {formatTooltipMoney(point.totalValue)}
         </p>
         <p className="text-xs text-muted-foreground">
-          ({formatTooltipPercent(value)})
+          ({formatTooltipPercent(marketIndex)})
         </p>
       </div>
     );
@@ -224,7 +223,7 @@ export function AreaPerformanceChart({
           <Tooltip content={renderTooltip} />
           <Area
             type="monotone"
-            dataKey="value"
+            dataKey="marketIndex"
             stroke="hsl(var(--primary))"
             strokeWidth={2}
             isAnimationActive={false}

@@ -9,7 +9,8 @@ export type OverviewAccountTab = {
 
 export type OverviewSeriesRow = {
   tsIso: string;
-  value: number;
+  marketIndex: number;
+  totalValue: number;
 };
 
 export type OverviewPositionRow = {

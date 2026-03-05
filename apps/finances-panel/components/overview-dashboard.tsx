@@ -63,7 +63,8 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
     () =>
       data.series.map((point) => ({
         label: labelForPoint(point.tsIso, data.range),
-        value: point.value,
+        marketIndex: point.marketIndex,
+        totalValue: point.totalValue,
         dateIso: point.tsIso,
       })),
     [data.range, data.series],
@@ -203,7 +204,7 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
       <Card title="Performance" contentClassName="space-y-4 px-0 pb-0 pt-4">
         <div className="px-5">
           <p className="text-sm text-muted-foreground">
-            Total portfolio value (includes deposits/withdrawals) · Total {formatMoney(data.totalValue)} · as of{' '}
+            Market-only performance (cash flows neutralized) · Total valuation {formatMoney(data.totalValue)} · as of{' '}
             {formatDateTime(data.asOfIso)}
           </p>
         </div>
@@ -219,7 +220,7 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
         ) : (
           <AreaPerformanceChart
             data={chartData}
-            baselineValue={chartData[0]?.value ?? null}
+            baselineValue={100}
           />
         )}
       </Card>

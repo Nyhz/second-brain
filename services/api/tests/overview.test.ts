@@ -66,8 +66,18 @@ mock.module('@second-brain/db', () => {
 
         if (text.includes('from finances.accounts')) {
           return [
-            { id: accountA, name: 'Broker A', openingBalanceEur: 1000 },
-            { id: accountB, name: 'Broker B', openingBalanceEur: 500 },
+            {
+              id: accountA,
+              name: 'Broker A',
+              accountType: 'brokerage',
+              openingBalanceEur: 1000,
+            },
+            {
+              id: accountB,
+              name: 'Broker B',
+              accountType: 'brokerage',
+              openingBalanceEur: 500,
+            },
           ];
         }
 
@@ -83,6 +93,19 @@ mock.module('@second-brain/db', () => {
               tradeCurrency: 'USD',
               fxRateToEur: 0.9,
               cashImpactEur: -200,
+              assetName: 'Apple',
+              symbol: 'AAPL',
+            },
+            {
+              accountId: accountA,
+              assetId: assetA,
+              transactionType: 'buy',
+              tradedAt: new Date('2026-03-03T00:00:00.000Z'),
+              quantity: 1,
+              unitPrice: 120,
+              tradeCurrency: 'USD',
+              fxRateToEur: 0.9,
+              cashImpactEur: -109.09,
               assetName: 'Apple',
               symbol: 'AAPL',
             },
@@ -238,7 +261,7 @@ describe('finances overview route', () => {
     const body = (await response.json()) as {
       range: string;
       accounts: Array<{ id: string; name: string }>;
-      series: Array<{ tsIso: string; value: number }>;
+      series: Array<{ tsIso: string; marketIndex: number; totalValue: number }>;
       positions: Array<{ assetId: string; symbol: string }>;
     };
 
@@ -285,7 +308,31 @@ describe('finances overview route', () => {
     const aapl = body.positions.find((row) => row.symbol === 'AAPL');
     expect(aapl).toBeDefined();
     expect(aapl?.currentUnitEur).toBeCloseTo(109.09, 2);
-    expect(body.totalValue).toBeCloseTo(1018.18, 2);
+    expect(body.totalValue).toBeCloseTo(327.27, 2);
+  });
+
+  test('neutralizes buy inflows from return metrics', async () => {
+    const app = buildApp();
+
+    const response = await app.handle(
+      new Request(
+        `http://local/finances/overview?range=1M&accountId=${accountA}`,
+      ),
+    );
+
+    await expectStatus(response, 200);
+    const body = (await response.json()) as {
+      deltaValue: number;
+      deltaPct: number;
+      series: Array<{ marketIndex: number; totalValue: number }>;
+    };
+
+    const latest = body.series[body.series.length - 1];
+    expect(latest).toBeDefined();
+    expect(latest?.marketIndex).toBeCloseTo(119.01, 2);
+    expect(latest?.totalValue).toBeCloseTo(327.27, 2);
+    expect(body.deltaValue).toBeCloseTo(34.85, 2);
+    expect(body.deltaPct).toBeCloseTo(19.01, 2);
   });
 
   test('rejects invalid range', async () => {
