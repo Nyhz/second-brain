@@ -24,12 +24,14 @@ type CreatableAccountType =
   | 'savings'
   | 'brokerage'
   | 'crypto_exchange'
-  | 'investment_platform';
+  | 'investment_platform'
+  | 'retirement_plan';
 
 const accountTypeLabel = (accountType: string) => {
   if (accountType === 'brokerage') return 'Broker';
   if (accountType === 'crypto_exchange') return 'Exchange';
   if (accountType === 'investment_platform') return 'Investment Fund Account';
+  if (accountType === 'retirement_plan') return 'Retirement Plan';
   if (accountType === 'savings') return 'Savings';
   return accountType;
 };
@@ -309,6 +311,7 @@ export function AccountsFeature() {
               <option value="investment_platform">
                 Investment Fund Account
               </option>
+              <option value="retirement_plan">Retirement Plan</option>
             </select>
           </div>
 

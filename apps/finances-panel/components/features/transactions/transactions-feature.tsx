@@ -102,7 +102,8 @@ const prettyTxType = (row: UnifiedTransactionRow) => {
 const isInvestmentAccount = (accountType: string) =>
   accountType === 'brokerage' ||
   accountType === 'crypto_exchange' ||
-  accountType === 'investment_platform';
+  accountType === 'investment_platform' ||
+  accountType === 'retirement_plan';
 
 const toLabel = (value: string) =>
   value.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());

@@ -197,6 +197,7 @@ const INVESTMENT_ACCOUNT_TYPES = new Set([
   'brokerage',
   'crypto_exchange',
   'investment_platform',
+  'retirement_plan',
 ]);
 const SAVINGS_ACCOUNT_TYPE = 'savings';
 
@@ -619,7 +620,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       throw new ApiHttpError(
         400,
         'ACCOUNT_TYPE_NOT_SUPPORTED',
-        'Asset transactions are only supported for brokerage and exchange accounts.',
+        'Asset transactions are only supported for investment accounts.',
       );
     }
 
@@ -4217,7 +4218,12 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
             from finances.asset_transactions at
             inner join finances.accounts acc on acc.id = at.account_id
             inner join finances.assets a on a.id = at.asset_id
-            where acc.account_type in ('brokerage', 'crypto_exchange')
+            where acc.account_type in (
+              'brokerage',
+              'crypto_exchange',
+              'investment_platform',
+              'retirement_plan'
+            )
             order by at.traded_at asc
           `);
         }
@@ -4773,9 +4779,12 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         };
       });
 
-      const finalMarketIndex = series[series.length - 1]?.marketIndex ?? 100;
-      const deltaValue = round2(totalValue - baselineTotalValue - cumulativeNetFlow);
-      const deltaPct = round2(finalMarketIndex - 100);
+      const rangeDeltaValue = round2(
+        totalValue - baselineTotalValue - cumulativeNetFlow,
+      );
+      const rangeDeltaPct = round2(
+        (series[series.length - 1]?.marketIndex ?? 100) - 100,
+      );
 
       const currentQuantities = quantityByAssetAt(asOfMs);
       const buyStatsByAsset = new Map<string, { qty: number; total: number }>();
@@ -4829,13 +4838,19 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
                 : (avgBuyUnitEur ?? 0);
 
           const currentTotal = round2(quantity * currentUnitEur);
-          const periodPnlValueEur = round2(
-            quantity * (currentUnitEur - startUnitEur),
-          );
-          const periodPnlPct =
+          const rangePnlValueEur = round2(quantity * (currentUnitEur - startUnitEur));
+          const rangePnlPct =
             startUnitEur <= 0
               ? 0
               : round2(((currentUnitEur - startUnitEur) / startUnitEur) * 100);
+          const periodPnlValueEur =
+            avgBuyTotalEur !== null
+              ? round2(currentTotal - avgBuyTotalEur)
+              : rangePnlValueEur;
+          const periodPnlPct =
+            avgBuyTotalEur !== null && avgBuyTotalEur > 0
+              ? round2((periodPnlValueEur / avgBuyTotalEur) * 100)
+              : rangePnlPct;
 
           return {
             assetId,
@@ -4856,6 +4871,26 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         })
         .filter((row): row is NonNullable<typeof row> => row !== null)
         .sort((a, b) => b.currentTotalEur - a.currentTotalEur);
+
+      const investedCostBasisEur = round2(
+        positions.reduce(
+          (sum, row) =>
+            sum +
+            (row.avgBuyTotalEur === null ? row.currentTotalEur : row.avgBuyTotalEur),
+          0,
+        ),
+      );
+      const unrealizedPnlValueEur = round2(
+        positions.reduce((sum, row) => sum + row.periodPnlValueEur, 0),
+      );
+      const unrealizedPnlPct =
+        investedCostBasisEur > 0
+          ? round2((unrealizedPnlValueEur / investedCostBasisEur) * 100)
+          : 0;
+      const deltaValue = includeInvestmentData
+        ? unrealizedPnlValueEur
+        : rangeDeltaValue;
+      const deltaPct = includeInvestmentData ? unrealizedPnlPct : rangeDeltaPct;
 
       return {
         range,

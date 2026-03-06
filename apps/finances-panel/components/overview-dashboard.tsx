@@ -192,7 +192,7 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
           subtext={`As of ${formatDateTime(data.asOfIso)}`}
         />
         <KpiCard
-          label={`Return ${data.range}`}
+          label="Unrealized P/L"
           value={formatSignedPercent(data.deltaPct)}
           delta={
             <span className="sb-sensitive-value">
@@ -322,7 +322,7 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
                 },
                 {
                   key: 'pnl',
-                  header: `P/L ${data.range}`,
+                  header: 'Unrealized P/L',
                   render: (row: OverviewPositionRow) => (
                     <span
                       className={

@@ -765,16 +765,21 @@ describe('finances routes', () => {
           name: 'Main',
           currency: 'USD',
           openingBalanceEur: 150,
-          accountType: 'brokerage',
+          accountType: 'retirement_plan',
         }),
       }),
     );
     expect(createdRes.status).toBe(201);
-    const created = await parseResponse<{ id: string; name: string }>(
+    const created = await parseResponse<{
+      id: string;
+      name: string;
+      accountType: string;
+    }>(
       createdRes,
     );
     expect(created.id).toBeDefined();
     expect(created.name).toBe('Main');
+    expect(created.accountType).toBe('retirement_plan');
 
     const invalidRes = await app.handle(
       createRequest('/finances/accounts', {
@@ -799,7 +804,7 @@ describe('finances routes', () => {
           name: 'Main',
           currency: 'USD',
           openingBalanceEur: 150,
-          accountType: 'brokerage',
+          accountType: 'retirement_plan',
         }),
       }),
     );
@@ -868,6 +873,49 @@ describe('finances routes', () => {
       }),
     );
     expect(missingAccountRes.status).toBe(404);
+  });
+
+  test('accepts short retirement fund code and keeps strict ISIN for stock', async () => {
+    const app = buildApp();
+
+    const retirementAssetRes = await app.handle(
+      createRequest('/finances/assets', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'My Pension Fund',
+          assetType: 'retirement_fund',
+          ticker: 'N5138',
+          isin: 'N5138',
+          currency: 'EUR',
+          quantity: 1,
+        }),
+      }),
+    );
+    expect(retirementAssetRes.status).toBe(201);
+    const retirementAsset = await parseResponse<{ isin: string }>(
+      retirementAssetRes,
+    );
+    expect(retirementAsset.isin).toBe('N5138');
+
+    const stockAssetRes = await app.handle(
+      createRequest('/finances/assets', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Invalid Stock',
+          assetType: 'stock',
+          symbol: 'IVS',
+          ticker: 'IVS',
+          isin: 'N5138',
+          currency: 'EUR',
+          quantity: 1,
+        }),
+      }),
+    );
+    expect(stockAssetRes.status).toBe(400);
+    const invalidPayload = await parseResponse<{ code: string }>(stockAssetRes);
+    expect(invalidPayload.code).toBe('VALIDATION_ERROR');
   });
 
   test('computes summary zeros and month-boundary totals', async () => {

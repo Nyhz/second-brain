@@ -20,6 +20,8 @@ type Point = {
   dateIso?: string;
 };
 const RETURN_PCT_MIN_BASELINE_EUR = 1;
+const CHART_EDGE_PADDING_RATIO = 0.02;
+const MIN_CHART_EDGE_PADDING = 0.05;
 
 export function AreaPerformanceChart({
   data,
@@ -82,14 +84,17 @@ export function AreaPerformanceChart({
     let minBound = min;
     let maxBound = max;
     if (min === max) {
-      const basePadding = Math.max(Math.abs(min) * 0.05, 1);
+      const basePadding = Math.max(Math.abs(min) * 0.0025, MIN_CHART_EDGE_PADDING);
       minBound = min - basePadding;
       maxBound = max + basePadding;
     } else {
-      const bottomPadding = Math.max(Math.abs(min) * 0.05, 1);
-      const topPadding = Math.max(Math.abs(max) * 0.05, 1);
-      minBound = min - bottomPadding;
-      maxBound = max + topPadding;
+      const spread = max - min;
+      const edgePadding = Math.max(
+        spread * CHART_EDGE_PADDING_RATIO,
+        MIN_CHART_EDGE_PADDING,
+      );
+      minBound = min - edgePadding;
+      maxBound = max + edgePadding;
     }
 
     const visibleRange = Math.max(maxBound - minBound, 1e-6);

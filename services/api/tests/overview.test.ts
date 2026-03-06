@@ -311,7 +311,7 @@ describe('finances overview route', () => {
     expect(body.totalValue).toBeCloseTo(327.27, 2);
   });
 
-  test('neutralizes buy inflows from return metrics', async () => {
+  test('returns cost-basis unrealized pnl for overview deltas', async () => {
     const app = buildApp();
 
     const response = await app.handle(
@@ -331,8 +331,8 @@ describe('finances overview route', () => {
     expect(latest).toBeDefined();
     expect(latest?.marketIndex).toBeCloseTo(119.01, 2);
     expect(latest?.totalValue).toBeCloseTo(327.27, 2);
-    expect(body.deltaValue).toBeCloseTo(34.85, 2);
-    expect(body.deltaPct).toBeCloseTo(19.01, 2);
+    expect(body.deltaValue).toBeCloseTo(18.18, 2);
+    expect(body.deltaPct).toBeCloseTo(5.88, 2);
   });
 
   test('rejects invalid range', async () => {

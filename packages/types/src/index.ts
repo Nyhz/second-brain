@@ -19,6 +19,7 @@ export const accountSchema = z.object({
     'brokerage',
     'crypto_exchange',
     'investment_platform',
+    'retirement_plan',
     'checking',
     'savings',
     'cash',
@@ -39,6 +40,7 @@ export const createAccountInputSchema = z.object({
     'brokerage',
     'crypto_exchange',
     'investment_platform',
+    'retirement_plan',
     'checking',
     'savings',
     'cash',
@@ -461,7 +463,7 @@ export const assetSchema = z.object({
   subtype: z.string().nullable(),
   symbol: z.string().nullable(),
   ticker: z.string().min(1),
-  isin: z.string().length(12),
+  isin: z.string().trim().min(1).max(12),
   exchange: z.string().nullable(),
   providerSymbol: z.string().nullable(),
   currency: z.string().length(3),
@@ -516,7 +518,7 @@ export const createAssetInputSchema = z
     subtype: z.string().trim().min(1).optional(),
     symbol: z.string().trim().min(1).optional(),
     ticker: z.string().trim().min(1),
-    isin: z.string().trim().length(12).optional(),
+    isin: z.string().trim().min(1).max(12).optional(),
     exchange: z.string().trim().min(1).optional(),
     providerSymbol: z.string().trim().min(1).optional(),
     currency: z.string().length(3).default('EUR'),
@@ -527,17 +529,31 @@ export const createAssetInputSchema = z
     manualPriceAsOf: z.string().optional(),
   })
   .superRefine((value, ctx) => {
-    const needsIsin = new Set([
+    const requiredIsinTypes = new Set([
       'stock',
       'etf',
       'mutual_fund',
       'retirement_fund',
     ]);
-    if (needsIsin.has(value.assetType) && !value.isin) {
+    const strictIsinTypes = new Set(['stock', 'etf', 'mutual_fund']);
+
+    if (requiredIsinTypes.has(value.assetType) && !value.isin) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['isin'],
         message: 'ISIN is required for this asset type.',
+      });
+    }
+
+    if (
+      value.isin &&
+      strictIsinTypes.has(value.assetType) &&
+      value.isin.trim().length !== 12
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['isin'],
+        message: 'ISIN must be exactly 12 characters for this asset type.',
       });
     }
   });
@@ -551,14 +567,33 @@ export const updateAssetInputSchema = z
     subtype: z.string().trim().min(1).nullable(),
     symbol: z.string().trim().min(1).nullable(),
     ticker: z.string().trim().min(1),
-    isin: z.string().trim().length(12),
+    isin: z.string().trim().min(1).max(12),
     exchange: z.string().trim().min(1).nullable(),
     providerSymbol: z.string().trim().min(1).nullable(),
     currency: z.string().length(3),
     notes: z.string().trim().min(1).nullable(),
     isActive: z.boolean(),
   })
-  .partial();
+  .partial()
+  .superRefine((value, ctx) => {
+    const strictIsinTypes = new Set(['stock', 'etf', 'mutual_fund']);
+    const shouldRequireStrictLength =
+      value.assetType === undefined
+        ? true
+        : strictIsinTypes.has(value.assetType);
+
+    if (
+      value.isin !== undefined &&
+      shouldRequireStrictLength &&
+      value.isin.trim().length !== 12
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['isin'],
+        message: 'ISIN must be exactly 12 characters for this asset type.',
+      });
+    }
+  });
 
 export type UpdateAssetInput = z.infer<typeof updateAssetInputSchema>;
 
@@ -609,6 +644,7 @@ export const overviewAccountSchema = z.object({
     'brokerage',
     'crypto_exchange',
     'investment_platform',
+    'retirement_plan',
     'checking',
     'savings',
     'cash',
