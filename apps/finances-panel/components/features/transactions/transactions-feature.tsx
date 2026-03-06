@@ -666,28 +666,35 @@ export function TransactionsFeature() {
                 {
                   key: 'occurredAt',
                   header: 'Date',
+                  sortValue: (row: UnifiedTransactionRow) =>
+                    new Date(row.occurredAt),
                   render: (row: UnifiedTransactionRow) =>
                     formatDateTime(row.occurredAt),
                 },
                 {
                   key: 'type',
                   header: 'Type',
+                  sortValue: (row: UnifiedTransactionRow) => prettyTxType(row),
                   render: (row: UnifiedTransactionRow) => prettyTxType(row),
                 },
                 {
                   key: 'asset',
                   header: 'Asset',
+                  sortValue: (row: UnifiedTransactionRow) => getAssetName(row),
                   render: (row: UnifiedTransactionRow) => getAssetName(row),
                 },
                 {
                   key: 'assetType',
                   header: 'Asset Type',
+                  sortValue: (row: UnifiedTransactionRow) =>
+                    prettyAssetType(row.assetType),
                   render: (row: UnifiedTransactionRow) =>
                     prettyAssetType(row.assetType),
                 },
                 {
                   key: 'native',
                   header: 'Amount',
+                  sortValue: (row: UnifiedTransactionRow) => row.amountNative,
                   render: (row: UnifiedTransactionRow) => (
                     <span className="sb-sensitive-value">
                       {formatAmountWithCurrency(row.amountNative, row.currency)}
@@ -697,6 +704,7 @@ export function TransactionsFeature() {
                 {
                   key: 'cash',
                   header: 'Cash Impact EUR',
+                  sortValue: (row: UnifiedTransactionRow) => row.cashImpactEur,
                   render: (row: UnifiedTransactionRow) => (
                     <span className="sb-sensitive-value">
                       {formatMoney(row.cashImpactEur)}

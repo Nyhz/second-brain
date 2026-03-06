@@ -1,5 +1,6 @@
 import './globals.css';
 import type { Metadata } from 'next';
+import { cookies } from 'next/headers';
 import Script from 'next/script';
 import type { ReactNode } from 'react';
 import { LayoutShell } from '../components/layout-shell';
@@ -8,8 +9,14 @@ import { ThemeProvider } from '../components/theme-provider';
 
 const themeBootScript = `(() => {
   try {
-    const raw = localStorage.getItem('sb-theme-mode');
-    const mode = raw === 'light' ? 'light' : 'dark';
+    const rawStorage = localStorage.getItem('sb-theme-mode');
+    const rawCookie =
+      document.cookie
+        .split('; ')
+        .find((entry) => entry.startsWith('sb-theme-mode='))
+        ?.split('=')[1] ?? null;
+    const mode =
+      rawStorage === 'light' || rawCookie === 'light' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', mode);
   } catch {
     document.documentElement.setAttribute('data-theme', 'dark');
@@ -30,11 +37,19 @@ export const metadata: Metadata = {
   applicationName: 'SecondBrain',
 };
 
-export default function RootLayout({ children }: { children: ReactNode }) {
+export default async function RootLayout({
+  children,
+}: {
+  children: ReactNode;
+}) {
+  const cookieStore = await cookies();
+  const themeCookie = cookieStore.get('sb-theme-mode')?.value;
+  const initialTheme = themeCookie === 'light' ? 'light' : 'dark';
+
   return (
     <html
       lang="en"
-      data-theme="dark"
+      data-theme={initialTheme}
       data-sensitive="visible"
       suppressHydrationWarning
     >

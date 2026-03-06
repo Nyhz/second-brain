@@ -192,6 +192,7 @@ const serializeAssetTransaction = (
 
 const round2 = (value: number) => Number(value.toFixed(2));
 const EURUSD_FX_SYMBOL = 'EURUSD=X';
+const MAX_RANGE_TREND_POINTS = 120;
 const RETURN_PCT_MIN_BASELINE_EUR = 1;
 const INVESTMENT_ACCOUNT_TYPES = new Set([
   'brokerage',
@@ -4606,6 +4607,62 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         return null;
       };
 
+      const normalizeIndexSeries = (values: number[]) => {
+        if (values.length <= MAX_RANGE_TREND_POINTS) {
+          return values;
+        }
+        const result: number[] = [];
+        const lastIndex = values.length - 1;
+        const step = lastIndex / (MAX_RANGE_TREND_POINTS - 1);
+        for (let index = 0; index < MAX_RANGE_TREND_POINTS; index += 1) {
+          result.push(values[Math.round(step * index)] ?? values[lastIndex] ?? 100);
+        }
+        return result;
+      };
+
+      const rangePriceIndex = (
+        symbol: string,
+        startTsMs: number,
+        endTsMs: number,
+      ): number[] => {
+        const list = pricesBySymbol.get(symbol);
+        if (!list || list.length === 0) {
+          return [];
+        }
+        const inRangePoints = list
+          .filter(
+            (point) => point.pricedAtMs >= startTsMs && point.pricedAtMs <= endTsMs,
+          )
+          .sort((a, b) => a.pricedAtMs - b.pricedAtMs);
+
+        const baseline =
+          inRangePoints[0]?.price ??
+          priceAtOrBefore(symbol, startTsMs) ??
+          priceAtOrAfter(symbol, startTsMs);
+        if (baseline === null || baseline <= 0) {
+          return [];
+        }
+
+        const endpointPrice = priceAtOrBefore(symbol, endTsMs);
+
+        const dedupedByTimestamp = new Map<number, number>();
+        if (inRangePoints.length === 0) {
+          dedupedByTimestamp.set(startTsMs, baseline);
+        }
+        for (const point of inRangePoints) {
+          dedupedByTimestamp.set(point.pricedAtMs, point.price);
+        }
+        if (endpointPrice !== null && endpointPrice > 0) {
+          dedupedByTimestamp.set(endTsMs, endpointPrice);
+        }
+
+        const normalizedPoints = [...dedupedByTimestamp.entries()]
+          .sort((a, b) => a[0] - b[0])
+          .map(([, price]) => round6((price / baseline) * 100));
+
+        return normalizeIndexSeries(normalizedPoints);
+      };
+
       const quantityByAssetAt = (tsMs: number) => {
         const quantities = new Map<string, number>();
         for (const row of tx) {
@@ -4843,14 +4900,8 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
             startUnitEur <= 0
               ? 0
               : round2(((currentUnitEur - startUnitEur) / startUnitEur) * 100);
-          const periodPnlValueEur =
-            avgBuyTotalEur !== null
-              ? round2(currentTotal - avgBuyTotalEur)
-              : rangePnlValueEur;
-          const periodPnlPct =
-            avgBuyTotalEur !== null && avgBuyTotalEur > 0
-              ? round2((periodPnlValueEur / avgBuyTotalEur) * 100)
-              : rangePnlPct;
+          const periodPnlValueEur = rangePnlValueEur;
+          const periodPnlPct = rangePnlPct;
 
           return {
             assetId,
@@ -4867,30 +4918,32 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
             currentTotalEur: currentTotal,
             periodPnlValueEur,
             periodPnlPct,
+            rangeIndex: rangePriceIndex(meta.symbol, rangeStartMs, asOfMs),
           };
         })
         .filter((row): row is NonNullable<typeof row> => row !== null)
         .sort((a, b) => b.currentTotalEur - a.currentTotalEur);
 
-      const investedCostBasisEur = round2(
+      const rangeStartReferenceEur = round2(
         positions.reduce(
           (sum, row) =>
-            sum +
-            (row.avgBuyTotalEur === null ? row.currentTotalEur : row.avgBuyTotalEur),
+            sum + (row.currentTotalEur - row.periodPnlValueEur),
           0,
         ),
       );
-      const unrealizedPnlValueEur = round2(
+      const unrealizedRangePnlValueEur = round2(
         positions.reduce((sum, row) => sum + row.periodPnlValueEur, 0),
       );
-      const unrealizedPnlPct =
-        investedCostBasisEur > 0
-          ? round2((unrealizedPnlValueEur / investedCostBasisEur) * 100)
+      const unrealizedRangePnlPct =
+        rangeStartReferenceEur > 0
+          ? round2((unrealizedRangePnlValueEur / rangeStartReferenceEur) * 100)
           : 0;
       const deltaValue = includeInvestmentData
-        ? unrealizedPnlValueEur
+        ? unrealizedRangePnlValueEur
         : rangeDeltaValue;
-      const deltaPct = includeInvestmentData ? unrealizedPnlPct : rangeDeltaPct;
+      const deltaPct = includeInvestmentData
+        ? unrealizedRangePnlPct
+        : rangeDeltaPct;
 
       return {
         range,

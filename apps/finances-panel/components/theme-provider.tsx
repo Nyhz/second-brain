@@ -20,6 +20,12 @@ type ThemeContextValue = {
 const ThemeContext = createContext<ThemeContextValue | null>(null);
 
 const KEY = 'sb-theme-mode';
+const ONE_YEAR_SECONDS = 60 * 60 * 24 * 365;
+
+const persistThemeMode = (mode: ThemeMode) => {
+  window.localStorage.setItem(KEY, mode);
+  document.cookie = `${KEY}=${mode}; Path=/; Max-Age=${ONE_YEAR_SECONDS}; SameSite=Lax`;
+};
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState<ThemeMode>('dark');
@@ -34,7 +40,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const setThemeMode = useCallback((nextMode: ThemeMode) => {
     setMode(nextMode);
     document.documentElement.setAttribute('data-theme', nextMode);
-    window.localStorage.setItem(KEY, nextMode);
+    persistThemeMode(nextMode);
   }, []);
 
   const value = useMemo(

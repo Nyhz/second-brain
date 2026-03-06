@@ -398,6 +398,7 @@ export function AssetsFeature() {
               {
                 key: 'asset',
                 header: 'Asset',
+                sortValue: (row: AssetWithPosition) => row.name,
                 render: (row: AssetWithPosition) => (
                   <div>
                     <div className="font-medium">{row.name}</div>
@@ -411,28 +412,34 @@ export function AssetsFeature() {
               {
                 key: 'type',
                 header: 'Type',
+                sortValue: (row: AssetWithPosition) => typeLabel(row.assetType),
                 render: (row: AssetWithPosition) => typeLabel(row.assetType),
               },
               {
                 key: 'symbol',
                 header: 'Symbol',
+                sortValue: (row: AssetWithPosition) => row.symbol,
                 render: (row: AssetWithPosition) => row.symbol ?? '-',
               },
               {
                 key: 'isin',
                 header: 'ISIN',
+                sortValue: (row: AssetWithPosition) =>
+                  row.assetType === 'crypto' ? null : row.isin,
                 render: (row: AssetWithPosition) =>
                   row.assetType === 'crypto' ? '' : (row.isin ?? '-'),
               },
               {
                 key: 'quantity',
                 header: 'Quantity',
+                sortValue: (row: AssetWithPosition) => holdingsByAssetId[row.id] ?? 0,
                 render: (row: AssetWithPosition) =>
                   formatQuantity(holdingsByAssetId[row.id] ?? 0),
               },
               {
                 key: 'price',
                 header: 'Unit Price',
+                sortValue: (row: AssetWithPosition) => row.resolvedUnitPrice,
                 render: (row: AssetWithPosition) =>
                   row.resolvedUnitPrice === null ? (
                     '-'
@@ -445,6 +452,7 @@ export function AssetsFeature() {
               {
                 key: 'value',
                 header: 'Current Value (EUR)',
+                sortValue: (row: AssetWithPosition) => row.currentValue,
                 render: (row: AssetWithPosition) =>
                   row.currentValue === null ? (
                     '-'
@@ -457,6 +465,7 @@ export function AssetsFeature() {
               {
                 key: 'status',
                 header: 'Status',
+                sortValue: (row: AssetWithPosition) => row.isActive,
                 render: (row: AssetWithPosition) =>
                   row.isActive ? 'Active' : 'Inactive',
               },

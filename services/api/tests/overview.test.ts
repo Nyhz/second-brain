@@ -262,13 +262,16 @@ describe('finances overview route', () => {
       range: string;
       accounts: Array<{ id: string; name: string }>;
       series: Array<{ tsIso: string; marketIndex: number; totalValue: number }>;
-      positions: Array<{ assetId: string; symbol: string }>;
+      positions: Array<{ assetId: string; symbol: string; rangeIndex: number[] }>;
     };
 
     expect(body.range).toBe('1M');
     expect(body.accounts.length).toBe(2);
     expect(body.series.length).toBeGreaterThan(0);
     expect(body.positions.length).toBe(2);
+    expect(body.positions.every((row) => Array.isArray(row.rangeIndex))).toBe(
+      true,
+    );
   });
 
   test('filters by accountId', async () => {
@@ -311,7 +314,28 @@ describe('finances overview route', () => {
     expect(body.totalValue).toBeCloseTo(327.27, 2);
   });
 
-  test('returns cost-basis unrealized pnl for overview deltas', async () => {
+  test('returns range-indexed price series per position', async () => {
+    const app = buildApp();
+
+    const response = await app.handle(
+      new Request(
+        `http://local/finances/overview?range=1M&accountId=${accountA}`,
+      ),
+    );
+
+    await expectStatus(response, 200);
+    const body = (await response.json()) as {
+      positions: Array<{ symbol: string; rangeIndex: number[] }>;
+    };
+
+    const aapl = body.positions.find((row) => row.symbol === 'AAPL');
+    expect(aapl).toBeDefined();
+    expect(aapl?.rangeIndex.length).toBeGreaterThanOrEqual(2);
+    expect(aapl?.rangeIndex[0]).toBeCloseTo(100, 6);
+    expect((aapl?.rangeIndex.at(-1) ?? 0) > 100).toBe(true);
+  });
+
+  test('returns range-based unrealized pnl for overview deltas', async () => {
     const app = buildApp();
 
     const response = await app.handle(
@@ -331,8 +355,8 @@ describe('finances overview route', () => {
     expect(latest).toBeDefined();
     expect(latest?.marketIndex).toBeCloseTo(119.01, 2);
     expect(latest?.totalValue).toBeCloseTo(327.27, 2);
-    expect(body.deltaValue).toBeCloseTo(18.18, 2);
-    expect(body.deltaPct).toBeCloseTo(5.88, 2);
+    expect(body.deltaValue).toBeCloseTo(139.77, 2);
+    expect(body.deltaPct).toBeCloseTo(74.54, 2);
   });
 
   test('rejects invalid range', async () => {

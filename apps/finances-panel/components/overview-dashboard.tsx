@@ -16,6 +16,7 @@ import {
   DataTable,
   EmptyState,
   KpiCard,
+  Sparkline,
 } from './ui';
 
 const RANGES: OverviewRange[] = ['1W', '1M', 'YTD', '1Y', 'MAX'];
@@ -26,19 +27,6 @@ const formatSignedPercent = (value: number) =>
 const formatSignedMoney = (value: number) => {
   const amount = formatMoney(Math.abs(value));
   return `${value >= 0 ? '+' : '-'}${amount}`;
-};
-
-const formatQuoteUnit = (value: number, currency: string) => {
-  const normalized = currency.trim().toUpperCase();
-  const amount = Number.isFinite(value) ? value.toFixed(4) : '0.0000';
-  return `${amount} ${normalized}`;
-};
-
-const formatOverviewQuantity = (row: OverviewPositionRow) => {
-  if (row.assetType === 'crypto') {
-    return row.quantity.toFixed(4);
-  }
-  return row.quantity.toFixed(0);
 };
 
 const labelForPoint = (iso: string, range: OverviewRange) => {
@@ -252,6 +240,9 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
                 {
                   key: 'asset',
                   header: 'Asset',
+                  headerClassName: 'w-[36%] min-w-[260px]',
+                  cellClassName: 'w-[36%] min-w-[260px]',
+                  sortValue: (row: OverviewPositionRow) => row.name,
                   render: (row: OverviewPositionRow) => (
                     <div className="leading-tight">
                       <div className="font-semibold text-foreground">
@@ -264,26 +255,10 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
                   ),
                 },
                 {
-                  key: 'qty',
-                  header: 'Quantity',
-                  render: (row: OverviewPositionRow) =>
-                    formatOverviewQuantity(row),
-                },
-                {
-                  key: 'avg-unit',
-                  header: 'Avg Buy / Unit',
-                  render: (row: OverviewPositionRow) =>
-                    row.avgBuyUnitEur === null ? (
-                      '-'
-                    ) : (
-                      <span className="sb-sensitive-value">
-                        {formatMoney(row.avgBuyUnitEur)}
-                      </span>
-                    ),
-                },
-                {
                   key: 'avg-total',
                   header: 'Avg Buy / Total',
+                  sortValue: (row: OverviewPositionRow) =>
+                    row.avgBuyTotalEur,
                   render: (row: OverviewPositionRow) =>
                     row.avgBuyTotalEur === null ? (
                       '-'
@@ -294,26 +269,9 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
                     ),
                 },
                 {
-                  key: 'cur-unit-quote',
-                  header: 'Current / Unit (Quote)',
-                  render: (row: OverviewPositionRow) => (
-                    <span className="sb-sensitive-value">
-                      {formatQuoteUnit(row.currentUnitQuote, row.quoteCurrency)}
-                    </span>
-                  ),
-                },
-                {
-                  key: 'cur-unit',
-                  header: 'Current / Unit (EUR)',
-                  render: (row: OverviewPositionRow) => (
-                    <span className="sb-sensitive-value">
-                      {formatMoney(row.currentUnitEur)}
-                    </span>
-                  ),
-                },
-                {
                   key: 'cur-total',
                   header: 'Current / Total',
+                  sortValue: (row: OverviewPositionRow) => row.currentTotalEur,
                   render: (row: OverviewPositionRow) => (
                     <span className="sb-sensitive-value">
                       {formatMoney(row.currentTotalEur)}
@@ -323,6 +281,7 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
                 {
                   key: 'pnl',
                   header: 'Unrealized P/L',
+                  sortValue: (row: OverviewPositionRow) => row.periodPnlValueEur,
                   render: (row: OverviewPositionRow) => (
                     <span
                       className={
@@ -338,6 +297,30 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
                       )
                     </span>
                   ),
+                },
+                {
+                  key: 'last-7d',
+                  header: 'Range trend',
+                  headerClassName:
+                    'w-[170px] min-w-[170px] text-right sm:w-[225px] sm:min-w-[225px] [&_button]:ml-auto',
+                  cellClassName:
+                    'w-[170px] min-w-[170px] text-right sm:w-[225px] sm:min-w-[225px]',
+                  sortValue: (row: OverviewPositionRow) =>
+                    row.rangeIndex[row.rangeIndex.length - 1] ?? null,
+                  render: (row: OverviewPositionRow) =>
+                    row.rangeIndex.length === 0 ? (
+                      <span className="text-xs text-muted-foreground">
+                        No data
+                      </span>
+                    ) : (
+                      <div className="ml-auto w-[170px] sm:w-[225px]">
+                        <Sparkline
+                          data={row.rangeIndex.map((value) => ({ value }))}
+                          width="100%"
+                          height={38}
+                        />
+                      </div>
+                    ),
                 },
               ]}
               rows={data.positions}

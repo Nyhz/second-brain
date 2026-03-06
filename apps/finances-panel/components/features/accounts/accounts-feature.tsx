@@ -219,21 +219,26 @@ export function AccountsFeature() {
               {
                 key: 'name',
                 header: 'Account',
+                sortValue: (row: Account) => row.name,
                 render: (row: Account) => row.name,
               },
               {
                 key: 'type',
                 header: 'Type',
+                sortValue: (row: Account) => accountTypeLabel(row.accountType),
                 render: (row: Account) => accountTypeLabel(row.accountType),
               },
               {
                 key: 'currency',
                 header: 'Currency',
+                sortValue: (row: Account) => row.currency,
                 render: (row: Account) => row.currency,
               },
               {
                 key: 'cash',
                 header: 'Cash EUR',
+                sortValue: (row: Account) =>
+                  row.accountType === 'savings' ? row.currentCashBalanceEur : null,
                 render: (row: Account) =>
                   row.accountType === 'savings' ? (
                     <span className="sb-sensitive-value">
@@ -246,6 +251,7 @@ export function AccountsFeature() {
               {
                 key: 'created',
                 header: 'Created',
+                sortValue: (row: Account) => new Date(row.createdAt),
                 render: (row: Account) => formatDate(row.createdAt),
               },
               {

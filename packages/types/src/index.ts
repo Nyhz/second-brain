@@ -674,6 +674,7 @@ export const overviewPositionRowSchema = z.object({
   currentTotalEur: z.number(),
   periodPnlValueEur: z.number(),
   periodPnlPct: z.number(),
+  rangeIndex: z.array(z.number()),
 });
 export type OverviewPositionRow = z.infer<typeof overviewPositionRowSchema>;
 

@@ -28,6 +28,7 @@ export type OverviewPositionRow = {
   currentTotalEur: number;
   periodPnlValueEur: number;
   periodPnlPct: number;
+  rangeIndex: number[];
 };
 
 export type OverviewState = {
