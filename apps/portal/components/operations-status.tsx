@@ -6,7 +6,8 @@ import type {
   ServiceStatusHistoryResponse,
 } from '@second-brain/types';
 import { useMemo, useState } from 'react';
-import { Button, Modal } from './ui';
+import { Button } from './ui/button';
+import { Modal } from './ui/modal';
 
 type OperationsStatusProps = {
   initialHistory: ServiceStatusHistoryResponse;
@@ -94,7 +95,7 @@ export function OperationsStatus({
   };
 
   return (
-    <section className="status-wrap">
+    <section className="status-wrap surface reveal">
       <div className="status-head">
         <div>
           <h2>Operations Status</h2>

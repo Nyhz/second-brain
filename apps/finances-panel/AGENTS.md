@@ -127,7 +127,7 @@ Avoid modeling shortcuts that prevent correct lot matching.
 - Postgres container persists data.
 - Provide:
   - `.env.example`
-  - `README.md` with `docker compose up` instructions
+  - `README.md` with Bun infra script instructions (`bun run infra:up`, `bun run infra:up:build`, `bun run infra:ps`)
   - seed script for demo data
 
 ## Testing & Quality Bar (v1)
@@ -151,6 +151,11 @@ Minimum:
    - Update README with run steps and CSV format supported.
 6. **Design for scale**
    - Keep seams for: multi-user, bank sync, Telegram, FIFO reporting.
+7. **Follow root post-task infra policy**
+   - For code/config/infra changes, run:
+     - `bun run infra:up:build`
+     - `bun run infra:ps`
+   - Report resulting service health in the task completion update.
 
 ## Open Questions (to be resolved during implementation)
 - Which CSV formats must be supported first (broker exports? custom template?)
@@ -158,4 +163,3 @@ Minimum:
 - Which price provider(s) to use for ETFs/stocks/crypto
 - Update frequency details (daily close vs intraday)
 - Real estate valuation frequency (manual snapshots?)
-

@@ -14,11 +14,13 @@ This repo is designed so that an agent (Codex/AI) can safely implement features 
 6. **Docker-first deployment**: Every service/app runs in containers.
 
 ## High-Level Architecture (v1)
-- **Apps**: Web UIs per domain (e.g., `finances-panel`).
+- **Apps**: Web UIs per domain (currently `portal` + `finances-panel`, with more domains later).
 - **Shared API**: Modular backend that hosts domain modules (finances, calendar, etc.).
 - **Shared DB**: One Postgres instance, **one schema per app/domain**.
-- **Shared packages**: types, DB utilities, validation, shared UI components.
+- **Shared packages**: types, env/config loading, and DB utilities.
+- **UI ownership**: app-local UI components/primitives per app; avoid cross-app UI coupling by default.
 - **Workers**: background jobs (cron/scheduler) to update pricing, imports, etc.
+- **Edge gateway**: Caddy routes traffic (`/`, `/finances`, `/api`, `/worker`) and exposes health.
 - **Integrations** (future): Telegram bot gateway shared across apps.
 
 ## Database Strategy
@@ -31,15 +33,20 @@ This repo is designed so that an agent (Codex/AI) can safely implement features 
   - future multi-user/SaaS conversion (add `user_id` later without painful rewrites)
 
 ## Deployment Strategy
-- Docker Compose for local orchestration.
+- Docker Compose for local orchestration, invoked through Bun scripts.
 - Each app/service runs in its own container.
 - The DB runs as a container with persistent volumes.
 - Services talk over an internal Docker network.
 - Expose only what is needed to localhost.
+- Canonical workflows:
+  - `bun run infra:up` (start)
+  - `bun run infra:up:build` (rebuild + restart)
+  - `bun run infra:ps` (status)
 
 ## Suggested Repo Layout (may evolve)
 second-brain/
   apps/
+    portal/
     finances-panel/
   services/
     api/              # modular API (domain modules)
@@ -47,7 +54,6 @@ second-brain/
   packages/
     types/            # shared TS types
     db/               # db client, migrations, schema helpers
-    ui/               # shared UI components (optional early)
     config/           # env schema + config loader
   infra/
     docker/           # compose, env templates, scripts
@@ -73,7 +79,7 @@ second-brain/
 ## Observability & Ops (v1 minimum)
 - Structured logs (JSON) with consistent fields.
 - Health endpoints for services (`/health`).
-- A minimal status page can come later.
+- Portal home includes a live operations status surface (history + check-now).
 
 ## Agent Rules (Codex/AI)
 1. **Read first**
@@ -88,12 +94,19 @@ second-brain/
    - Keep domain logic inside its module/schema. Avoid cross-domain coupling.
 6. **No real personal data**
    - Use synthetic seed data only.
+7. **Post-task infra rebuild (required for code/config/infra changes)**
+   - After finishing any code/config/infra change task, run:
+     - `bun run infra:up:build`
+     - `bun run infra:ps`
+   - Include a brief service health summary in the final update.
+   - For planning-only, discussion-only, or read-only review tasks, this rebuild step is not required.
 
 ## Definition of Done (platform-level)
-- `docker compose up` starts all required services cleanly.
+- `bun run infra:up:build` starts/rebuilds all required services cleanly.
+- `bun run infra:ps` shows platform services healthy (`postgres`, `api`, `worker`, `finances-panel`, `portal`, `caddy`).
 - Each service has a health check.
 - Migrations are repeatable and documented.
-- The finances app can display a working MVP flow end-to-end.
+- Portal and finances app can display working MVP flows end-to-end.
 
 ## Runtime & Tooling
 
