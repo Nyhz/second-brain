@@ -26,6 +26,7 @@ const navItems: NavItem[] = [
   { href: withBasePath('/assets'), label: 'Assets' },
   { href: withBasePath('/accounts'), label: 'Accounts' },
   { href: withBasePath('/transactions'), label: 'Transactions' },
+  { href: withBasePath('/taxes'), label: 'Taxes' },
 ];
 
 export function LayoutShell({ children }: { children: ReactNode }) {

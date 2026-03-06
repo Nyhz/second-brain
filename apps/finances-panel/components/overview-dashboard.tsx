@@ -74,6 +74,12 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
       ? 'All Accounts'
       : (data.accounts.find((account) => account.id === data.accountId)?.name ??
         'Unknown Account');
+  const selectedAccountType =
+    data.accountId === 'all'
+      ? null
+      : (data.accounts.find((account) => account.id === data.accountId)
+          ?.accountType ?? null);
+  const shouldShowPositions = selectedAccountType !== 'savings';
   const filterButtonBase =
     'h-8 rounded-md border-border/70 bg-card/70 px-3 text-xs text-muted-foreground hover:bg-muted hover:text-foreground';
 
@@ -104,8 +110,8 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
             General portfolio status with performance and open positions.
           </p>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2">
-          <div className="space-y-2">
+        <div className="flex w-full flex-col gap-3 xl:max-w-[980px] xl:flex-row xl:items-end">
+          <div className="space-y-2 xl:flex-1">
             <p className="text-[11px] font-medium uppercase tracking-[0.13em] text-muted-foreground">
               Account
             </p>
@@ -145,12 +151,12 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
               ))}
             </div>
           </div>
-          <div className="space-y-2">
-            <p className="text-[11px] font-medium uppercase tracking-[0.13em] text-muted-foreground">
+          <div className="space-y-2 xl:min-w-[320px]">
+            <p className="text-[11px] font-medium uppercase tracking-[0.13em] text-muted-foreground xl:text-right">
               Range
             </p>
             <div
-              className="flex flex-wrap gap-2"
+              className="flex flex-wrap gap-2 xl:justify-end"
               role="tablist"
               aria-label="Range filter"
             >
@@ -185,9 +191,6 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
           label={`Return ${data.range}`}
           value={formatSignedPercent(data.deltaPct)}
           delta={formatSignedMoney(data.deltaValue)}
-          subtext={
-            data.deltaValue >= 0 ? 'Positive momentum' : 'Drawdown period'
-          }
         />
         <KpiCard
           label="Open Positions"
@@ -225,88 +228,94 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
         )}
       </Card>
 
-      <Card title="Positions" contentClassName="space-y-3">
-        <p className="small">
-          {selectedAccountName} · {data.range} range
-        </p>
-        {loading ? <p className="small">Loading positions...</p> : null}
-        {data.positions.length === 0 ? (
-          <EmptyState message="No open positions for this account and range." />
-        ) : (
-          <DataTable
-            columns={[
-              {
-                key: 'asset',
-                header: 'Asset',
-                render: (row: OverviewPositionRow) => (
-                  <div>
-                    <strong>{row.symbol}</strong>
-                    <div className="small">{row.name}</div>
-                  </div>
-                ),
-              },
-              {
-                key: 'qty',
-                header: 'Quantity',
-                render: (row: OverviewPositionRow) =>
-                  formatOverviewQuantity(row),
-              },
-              {
-                key: 'avg-unit',
-                header: 'Avg Buy / Unit',
-                render: (row: OverviewPositionRow) =>
-                  row.avgBuyUnitEur === null
-                    ? '-'
-                    : formatMoney(row.avgBuyUnitEur),
-              },
-              {
-                key: 'avg-total',
-                header: 'Avg Buy / Total',
-                render: (row: OverviewPositionRow) =>
-                  row.avgBuyTotalEur === null
-                    ? '-'
-                    : formatMoney(row.avgBuyTotalEur),
-              },
-              {
-                key: 'cur-unit-quote',
-                header: 'Current / Unit (Quote)',
-                render: (row: OverviewPositionRow) =>
-                  formatQuoteUnit(row.currentUnitQuote, row.quoteCurrency),
-              },
-              {
-                key: 'cur-unit',
-                header: 'Current / Unit (EUR)',
-                render: (row: OverviewPositionRow) =>
-                  formatMoney(row.currentUnitEur),
-              },
-              {
-                key: 'cur-total',
-                header: 'Current / Total',
-                render: (row: OverviewPositionRow) =>
-                  formatMoney(row.currentTotalEur),
-              },
-              {
-                key: 'pnl',
-                header: `P/L ${data.range}`,
-                render: (row: OverviewPositionRow) => (
-                  <span
-                    className={
-                      row.periodPnlValueEur >= 0
-                        ? 'text-[hsl(var(--success))]'
-                        : 'text-destructive'
-                    }
-                  >
-                    {formatSignedPercent(row.periodPnlPct)} (
-                    {formatSignedMoney(row.periodPnlValueEur)})
-                  </span>
-                ),
-              },
-            ]}
-            rows={data.positions}
-            rowKey={(row) => row.assetId}
-          />
-        )}
-      </Card>
+      {shouldShowPositions ? (
+        <Card title="Positions" contentClassName="space-y-3">
+          <p className="small">
+            {selectedAccountName} · {data.range} range
+          </p>
+          {loading ? <p className="small">Loading positions...</p> : null}
+          {data.positions.length === 0 ? (
+            <EmptyState message="No open positions for this account and range." />
+          ) : (
+            <DataTable
+              columns={[
+                {
+                  key: 'asset',
+                  header: 'Asset',
+                  render: (row: OverviewPositionRow) => (
+                    <div className="leading-tight">
+                      <div className="font-semibold text-foreground">
+                        {row.name}
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {row.symbol}
+                      </div>
+                    </div>
+                  ),
+                },
+                {
+                  key: 'qty',
+                  header: 'Quantity',
+                  render: (row: OverviewPositionRow) =>
+                    formatOverviewQuantity(row),
+                },
+                {
+                  key: 'avg-unit',
+                  header: 'Avg Buy / Unit',
+                  render: (row: OverviewPositionRow) =>
+                    row.avgBuyUnitEur === null
+                      ? '-'
+                      : formatMoney(row.avgBuyUnitEur),
+                },
+                {
+                  key: 'avg-total',
+                  header: 'Avg Buy / Total',
+                  render: (row: OverviewPositionRow) =>
+                    row.avgBuyTotalEur === null
+                      ? '-'
+                      : formatMoney(row.avgBuyTotalEur),
+                },
+                {
+                  key: 'cur-unit-quote',
+                  header: 'Current / Unit (Quote)',
+                  render: (row: OverviewPositionRow) =>
+                    formatQuoteUnit(row.currentUnitQuote, row.quoteCurrency),
+                },
+                {
+                  key: 'cur-unit',
+                  header: 'Current / Unit (EUR)',
+                  render: (row: OverviewPositionRow) =>
+                    formatMoney(row.currentUnitEur),
+                },
+                {
+                  key: 'cur-total',
+                  header: 'Current / Total',
+                  render: (row: OverviewPositionRow) =>
+                    formatMoney(row.currentTotalEur),
+                },
+                {
+                  key: 'pnl',
+                  header: `P/L ${data.range}`,
+                  render: (row: OverviewPositionRow) => (
+                    <span
+                      className={
+                        row.periodPnlValueEur >= 0
+                          ? 'text-[hsl(var(--success))]'
+                          : 'text-destructive'
+                      }
+                    >
+                      {formatSignedPercent(row.periodPnlPct)} (
+                      {formatSignedMoney(row.periodPnlValueEur)})
+                    </span>
+                  ),
+                },
+              ]}
+              rows={data.positions}
+              rowKey={(row) => row.assetId}
+            />
+          )}
+        </Card>
+      ) : null}
     </div>
   );
 }

@@ -1047,4 +1047,47 @@ describe('finances routes', () => {
 
     expect(state.assets[0]?.isActive).toBe(false);
   });
+
+  test('returns explicit conflict when creating duplicated crypto asset', async () => {
+    const app = buildApp();
+
+    const firstRes = await app.handle(
+      createRequest('/finances/assets', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Ethereum',
+          assetType: 'crypto',
+          symbol: 'ETH',
+          providerSymbol: 'ETH-EUR',
+          ticker: 'ETH',
+          currency: 'EUR',
+          quantity: 1,
+        }),
+      }),
+    );
+    expect(firstRes.status).toBe(201);
+
+    const duplicateRes = await app.handle(
+      createRequest('/finances/assets', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Ethereum Duplicate',
+          assetType: 'crypto',
+          symbol: 'ETH',
+          providerSymbol: 'ETH-EUR',
+          ticker: 'ETH',
+          currency: 'EUR',
+          quantity: 1,
+        }),
+      }),
+    );
+
+    expect(duplicateRes.status).toBe(409);
+    const duplicate = await parseResponse<{ code: string; message: string }>(
+      duplicateRes,
+    );
+    expect(duplicate.code).toBe('ASSET_ALREADY_EXISTS');
+  });
 });

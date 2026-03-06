@@ -1,6 +1,7 @@
 export * from './app-shell';
 export * from './button';
 export * from './card';
+export * from './confirm-modal';
 export * from './data-table';
 export * from './kpi-card';
 export * from './modal';

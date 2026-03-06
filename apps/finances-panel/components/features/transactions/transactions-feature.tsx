@@ -5,6 +5,8 @@ import type {
   AssetTransactionType,
   AssetType,
   AssetWithPosition,
+  BinanceImportResult,
+  CobasImportResult,
   DegiroImportResult,
   UnifiedTransactionRow,
 } from '@second-brain/types';
@@ -23,6 +25,7 @@ import {
 import {
   Button,
   Card,
+  ConfirmModal,
   DataTable,
   EmptyState,
   ErrorState,
@@ -48,9 +51,16 @@ const initialForm = (accountId = ''): TransactionFormInput => ({
   notes: '',
 });
 
-type TaxSummary = {
-  year: number;
-  realizedGainLossEur: number;
+type ImportSource = 'degiro' | 'binance' | 'cobas';
+type TransactionCreateMode = 'asset_transaction' | 'deposit';
+
+type TransactionsImportResult =
+  | BinanceImportResult
+  | DegiroImportResult
+  | CobasImportResult;
+type TimelineFilterOption = {
+  value: string;
+  label: string;
 };
 
 const txTypes: AssetTransactionType[] = ['buy', 'sell', 'fee', 'dividend'];
@@ -84,13 +94,32 @@ const prettyAssetType = (assetType: AssetType | null) => {
 
 const prettyTxType = (row: UnifiedTransactionRow) => {
   if (row.rowKind === 'asset_transaction') {
-    return row.transactionType ?? '-';
+    return toLabel(row.transactionType ?? 'Unknown');
   }
-  return row.movementType ?? 'cash_movement';
+  return toLabel(row.movementType ?? 'Cash Movement');
 };
 
 const isInvestmentAccount = (accountType: string) =>
-  accountType === 'brokerage' || accountType === 'crypto_exchange';
+  accountType === 'brokerage' ||
+  accountType === 'crypto_exchange' ||
+  accountType === 'investment_platform';
+
+const toLabel = (value: string) =>
+  value
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+
+const getRowTypeKey = (row: UnifiedTransactionRow) =>
+  row.rowKind === 'asset_transaction'
+    ? `tx:${row.transactionType ?? 'unknown'}`
+    : `cash:${row.movementType ?? 'cash_movement'}`;
+
+const getRowTypeLabel = (row: UnifiedTransactionRow) => {
+  if (row.rowKind === 'asset_transaction') {
+    return toLabel(row.transactionType ?? 'Unknown');
+  }
+  return toLabel(row.movementType ?? 'Cash Movement');
+};
 
 export function TransactionsFeature() {
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -104,15 +133,24 @@ export function TransactionsFeature() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
-  const [isTaxLoading, setIsTaxLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [taxSummary, setTaxSummary] = useState<TaxSummary | null>(null);
-  const [taxYear, setTaxYear] = useState(new Date().getUTCFullYear());
+  const [confirmDeleteTransaction, setConfirmDeleteTransaction] =
+    useState<UnifiedTransactionRow | null>(null);
+  const [typeFilter, setTypeFilter] = useState('all');
+  const [assetFilter, setAssetFilter] = useState('all');
+  const [assetTypeFilter, setAssetTypeFilter] = useState('all');
+  const [timelinePage, setTimelinePage] = useState(1);
+  const [timelinePageSize, setTimelinePageSize] = useState(25);
 
+  const [createMode, setCreateMode] =
+    useState<TransactionCreateMode>('asset_transaction');
+  const [depositAmount, setDepositAmount] = useState('0');
+
+  const [importSource, setImportSource] = useState<ImportSource>('degiro');
   const [importAccountId, setImportAccountId] = useState('');
   const [importDryRun, setImportDryRun] = useState(true);
   const [importFile, setImportFile] = useState<File | null>(null);
-  const [importResult, setImportResult] = useState<DegiroImportResult | null>(
+  const [importResult, setImportResult] = useState<TransactionsImportResult | null>(
     null,
   );
 
@@ -142,46 +180,56 @@ export function TransactionsFeature() {
     () => accounts.filter((account) => isInvestmentAccount(account.accountType)),
     [accounts],
   );
+  const brokerageAccounts = useMemo(
+    () => accounts.filter((account) => account.accountType === 'brokerage'),
+    [accounts],
+  );
+  const exchangeAccounts = useMemo(
+    () => accounts.filter((account) => account.accountType === 'crypto_exchange'),
+    [accounts],
+  );
+  const investmentFundAccounts = useMemo(
+    () => accounts.filter((account) => account.accountType === 'investment_platform'),
+    [accounts],
+  );
+  const savingsAccounts = useMemo(
+    () => accounts.filter((account) => account.accountType === 'savings'),
+    [accounts],
+  );
+  const createAccounts = useMemo(
+    () =>
+      createMode === 'deposit'
+        ? savingsAccounts
+        : investmentAccounts,
+    [createMode, investmentAccounts, savingsAccounts],
+  );
+  const importAccounts = useMemo(
+    () =>
+      importSource === 'degiro'
+        ? brokerageAccounts
+        : importSource === 'binance'
+          ? exchangeAccounts
+          : investmentFundAccounts,
+    [brokerageAccounts, exchangeAccounts, importSource, investmentFundAccounts],
+  );
 
   useEffect(() => {
     void load();
   }, [load]);
 
   useEffect(() => {
-    const defaultAccountId = investmentAccounts[0]?.id ?? '';
-    if (!investmentAccounts.some((account) => account.id === form.accountId)) {
+    const defaultCreateAccountId = createAccounts[0]?.id ?? '';
+    if (!createAccounts.some((account) => account.id === form.accountId)) {
       setForm((current) => ({
         ...current,
-        accountId: defaultAccountId,
+        accountId: defaultCreateAccountId,
       }));
     }
-    if (!investmentAccounts.some((account) => account.id === importAccountId)) {
-      setImportAccountId(defaultAccountId);
+    const defaultImportAccountId = importAccounts[0]?.id ?? '';
+    if (!importAccounts.some((account) => account.id === importAccountId)) {
+      setImportAccountId(defaultImportAccountId);
     }
-  }, [form.accountId, importAccountId, investmentAccounts]);
-
-  const loadTaxSummary = useCallback(async () => {
-    setIsTaxLoading(true);
-    try {
-      const data = await apiRequest<{
-        year: number;
-        realizedGainLossEur: number;
-      }>(`/finances/tax/yearly-summary?year=${taxYear}`);
-      setTaxSummary({
-        year: data.year,
-        realizedGainLossEur: data.realizedGainLossEur,
-      });
-      setErrorMessage(null);
-    } catch (error) {
-      setErrorMessage(getApiErrorMessage(error));
-    } finally {
-      setIsTaxLoading(false);
-    }
-  }, [taxYear]);
-
-  useEffect(() => {
-    void loadTaxSummary();
-  }, [loadTaxSummary]);
+  }, [createAccounts, form.accountId, importAccountId, importAccounts]);
 
   const filteredAssets = useMemo(() => {
     return assets.filter(
@@ -199,6 +247,11 @@ export function TransactionsFeature() {
   }, [filteredAssets, form.assetId]);
 
   const cashImpactPreview = useMemo(() => {
+    if (createMode === 'deposit') {
+      const amount = Number(depositAmount || '0');
+      return Number.isFinite(amount) ? amount : Number.NaN;
+    }
+
     const quantity = Number(form.quantity || '0');
     const unitPrice = Number(form.unitPrice || '0');
     const feesAmount = Number(form.feesAmount || '0');
@@ -229,7 +282,7 @@ export function TransactionsFeature() {
       return toEur(net);
     }
     return 0;
-  }, [form]);
+  }, [createMode, depositAmount, form]);
 
   const withholdingPreview = useMemo(() => {
     const gross = Number(form.dividendGross || '0');
@@ -245,21 +298,50 @@ export function TransactionsFeature() {
 
   const createTransaction = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const validation = validateTransactionForm(form);
-    if (!validation.ok) {
-      setErrorMessage(validation.message);
-      return;
-    }
 
     setIsSaving(true);
     try {
-      await apiRequest('/finances/asset-transactions', {
-        method: 'POST',
-        body: JSON.stringify(validation.normalized),
-      });
-      setForm(initialForm(validation.normalized.accountId));
+      if (createMode === 'deposit') {
+        if (!form.accountId) {
+          setErrorMessage('Select a savings account before creating a deposit.');
+          return;
+        }
+        const amount = Number(depositAmount || '0');
+        if (!Number.isFinite(amount) || amount <= 0) {
+          setErrorMessage('Deposit amount must be greater than 0.');
+          return;
+        }
+
+        await apiRequest('/finances/account-cash-movements', {
+          method: 'POST',
+          body: JSON.stringify({
+            accountId: form.accountId,
+            movementType: 'deposit',
+            occurredAt: new Date(form.tradedAt).toISOString(),
+            nativeAmount: amount,
+            currency: 'EUR',
+            notes: form.notes.trim() || null,
+          }),
+        });
+        setDepositAmount('0');
+        setForm(initialForm(form.accountId));
+      } else {
+        const validation = validateTransactionForm(form);
+        if (!validation.ok) {
+          setErrorMessage(validation.message);
+          return;
+        }
+
+        await apiRequest('/finances/asset-transactions', {
+          method: 'POST',
+          body: JSON.stringify(validation.normalized),
+        });
+        setForm(initialForm(validation.normalized.accountId));
+      }
+
       setIsCreateModalOpen(false);
-      await Promise.all([load(), loadTaxSummary()]);
+      await load();
+      setErrorMessage(null);
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
     } finally {
@@ -271,24 +353,22 @@ export function TransactionsFeature() {
     if (transaction.rowKind !== 'asset_transaction') {
       return;
     }
+    setConfirmDeleteTransaction(transaction);
+  };
 
-    if (
-      !window.confirm(
-        `Delete ${transaction.transactionType} transaction from ${formatDateTime(
-          transaction.occurredAt,
-        )}?`,
-      )
-    ) {
+  const confirmDelete = async () => {
+    if (!confirmDeleteTransaction) {
       return;
     }
 
-    setDeletingTransactionId(transaction.id);
+    setDeletingTransactionId(confirmDeleteTransaction.id);
     try {
-      await apiRequest(`/finances/asset-transactions/${transaction.id}`, {
+      await apiRequest(`/finances/asset-transactions/${confirmDeleteTransaction.id}`, {
         method: 'DELETE',
       });
-      await Promise.all([load(), loadTaxSummary()]);
+      await load();
       setErrorMessage(null);
+      setConfirmDeleteTransaction(null);
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
     } finally {
@@ -304,8 +384,16 @@ export function TransactionsFeature() {
 
   const runImport = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const selectedSourceLabel =
+      importSource === 'degiro'
+        ? 'DEGIRO'
+        : importSource === 'binance'
+          ? 'Binance'
+          : 'COBAS';
     if (!importAccountId) {
-      setErrorMessage('Select an investment account before importing.');
+      setErrorMessage(
+        `Select a compatible ${selectedSourceLabel} account before importing.`,
+      );
       return;
     }
     if (!importFile) {
@@ -320,8 +408,14 @@ export function TransactionsFeature() {
     setIsImporting(true);
     try {
       const csvText = await importFile.text();
-      const result = await apiRequest<DegiroImportResult>(
-        '/finances/import/degiro-transactions',
+      const endpoint =
+        importSource === 'degiro'
+          ? '/finances/import/degiro-transactions'
+          : importSource === 'binance'
+            ? '/finances/import/binance-transactions'
+            : '/finances/import/cobas-transactions';
+      const result = await apiRequest<TransactionsImportResult>(
+        endpoint,
         {
           method: 'POST',
           body: JSON.stringify({
@@ -334,7 +428,7 @@ export function TransactionsFeature() {
       );
       setImportResult(result);
       setErrorMessage(null);
-      await Promise.all([load(), loadTaxSummary()]);
+      await load();
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
     } finally {
@@ -360,15 +454,93 @@ export function TransactionsFeature() {
       .reduce((sum, row) => sum + row.cashImpactEur, 0);
   }, [rows]);
 
-  const totalFees = useMemo(() => {
-    return rows
-      .filter(
-        (row) =>
-          (row.rowKind === 'asset_transaction' && row.transactionType === 'fee') ||
-          row.movementType === 'connectivity_fee',
-      )
-      .reduce((sum, row) => sum + Math.abs(row.cashImpactEur), 0);
+  const assetNameById = useMemo(() => {
+    return new Map(assets.map((asset) => [asset.id, asset.name]));
+  }, [assets]);
+
+  const getAssetName = useCallback(
+    (row: UnifiedTransactionRow) => {
+      if (!row.assetId) {
+        return '-';
+      }
+      const assetName = assetNameById.get(row.assetId);
+      if (assetName) {
+        return assetName;
+      }
+      if (row.assetLabel?.includes('·')) {
+        return row.assetLabel.split('·').at(-1)?.trim() ?? row.assetLabel;
+      }
+      return row.assetLabel ?? '-';
+    },
+    [assetNameById],
+  );
+
+  const typeFilterOptions = useMemo<TimelineFilterOption[]>(() => {
+    const options = new Map<string, string>();
+    for (const row of rows) {
+      options.set(getRowTypeKey(row), getRowTypeLabel(row));
+    }
+    return [
+      { value: 'all', label: 'All Types' },
+      ...Array.from(options.entries())
+        .sort((a, b) => a[1].localeCompare(b[1]))
+        .map(([value, label]) => ({ value, label })),
+    ];
   }, [rows]);
+
+  const assetFilterOptions = useMemo<TimelineFilterOption[]>(() => {
+    const options = new Map<string, string>();
+    for (const row of rows) {
+      if (!row.assetId) continue;
+      options.set(row.assetId, getAssetName(row));
+    }
+    return [
+      { value: 'all', label: 'All Assets' },
+      ...Array.from(options.entries())
+        .sort((a, b) => a[1].localeCompare(b[1]))
+        .map(([value, label]) => ({ value, label })),
+    ];
+  }, [getAssetName, rows]);
+
+  const assetTypeFilterOptions = useMemo<TimelineFilterOption[]>(() => {
+    const options = new Map<string, string>();
+    for (const row of rows) {
+      if (!row.assetType) continue;
+      options.set(row.assetType, prettyAssetType(row.assetType));
+    }
+    return [
+      { value: 'all', label: 'All Asset Types' },
+      ...Array.from(options.entries())
+        .sort((a, b) => a[1].localeCompare(b[1]))
+        .map(([value, label]) => ({ value, label })),
+    ];
+  }, [rows]);
+
+  const filteredRows = useMemo(() => {
+    return rows.filter((row) => {
+      const matchesType =
+        typeFilter === 'all' || getRowTypeKey(row) === typeFilter;
+      const matchesAsset =
+        assetFilter === 'all' || row.assetId === assetFilter;
+      const matchesAssetType =
+        assetTypeFilter === 'all' || row.assetType === assetTypeFilter;
+      return matchesType && matchesAsset && matchesAssetType;
+    });
+  }, [assetFilter, assetTypeFilter, rows, typeFilter]);
+
+  useEffect(() => {
+    setTimelinePage(1);
+  }, [typeFilter, assetFilter, assetTypeFilter, timelinePageSize]);
+
+  const totalTimelinePages = Math.max(
+    1,
+    Math.ceil(filteredRows.length / timelinePageSize),
+  );
+  const activeTimelinePage = Math.min(timelinePage, totalTimelinePages);
+  const paginatedRows = useMemo(() => {
+    const start = (activeTimelinePage - 1) * timelinePageSize;
+    return filteredRows.slice(start, start + timelinePageSize);
+  }, [activeTimelinePage, filteredRows, timelinePageSize]);
 
   const failedImportRows = importResult
     ? importResult.results.filter((row) => row.status === 'failed').slice(0, 8)
@@ -380,7 +552,7 @@ export function TransactionsFeature() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Transactions</h1>
           <p className="text-sm text-muted-foreground">
-            Register operations and import DEGIRO transactions CSV.
+            Register operations and import DEGIRO, Binance, or COBAS CSV files.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -395,119 +567,192 @@ export function TransactionsFeature() {
 
       {errorMessage ? <ErrorState message={errorMessage} /> : null}
 
-      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
         <KpiCard label="Buy Outflows" value={formatMoney(totalBuys)} />
         <KpiCard label="Sell Inflows" value={formatMoney(totalSells)} />
-        <KpiCard label="Fee Outflows" value={formatMoney(totalFees)} />
-        <KpiCard label="Rows" value={String(rows.length)} />
+        <KpiCard label="Transactions" value={String(rows.length)} />
       </section>
 
-      <Card title="Year-End Tax Summary">
-        <div className="grid gap-4 sm:grid-cols-[220px_1fr_auto] sm:items-end">
-          <div className="grid gap-1.5">
-            <label className="text-sm font-medium" htmlFor="tax-year">
-              Tax Year
-            </label>
-            <input
-              id="tax-year"
-              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-              type="number"
-              value={taxYear}
-              onChange={(event) => setTaxYear(Number(event.target.value))}
-              min={2000}
-              max={2100}
-            />
-          </div>
-          <div className="text-sm text-muted-foreground">
-            {taxSummary ? (
-              <>
-                <p>Year: {taxSummary.year}</p>
-                <p>
-                  Realized Gain/Loss: {formatMoney(taxSummary.realizedGainLossEur)}
-                </p>
-              </>
-            ) : (
-              <p>No summary loaded.</p>
-            )}
-          </div>
-          <Button
-            type="button"
-            variant="secondary"
-            onClick={() => void loadTaxSummary()}
-            disabled={isTaxLoading}
-          >
-            {isTaxLoading ? 'Loading...' : 'Refresh'}
-          </Button>
-        </div>
-      </Card>
-
       <Card title="Transactions Timeline">
+        <div className="mb-4 grid gap-3 md:grid-cols-3">
+          <div className="grid gap-1.5">
+            <label
+              className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+              htmlFor="timeline-filter-type"
+            >
+              Type
+            </label>
+            <select
+              id="timeline-filter-type"
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={typeFilter}
+              onChange={(event) => setTypeFilter(event.target.value)}
+            >
+              {typeFilterOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid gap-1.5">
+            <label
+              className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+              htmlFor="timeline-filter-asset"
+            >
+              Asset
+            </label>
+            <select
+              id="timeline-filter-asset"
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={assetFilter}
+              onChange={(event) => setAssetFilter(event.target.value)}
+            >
+              {assetFilterOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid gap-1.5">
+            <label
+              className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+              htmlFor="timeline-filter-asset-type"
+            >
+              Asset Type
+            </label>
+            <select
+              id="timeline-filter-asset-type"
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={assetTypeFilter}
+              onChange={(event) => setAssetTypeFilter(event.target.value)}
+            >
+              {assetTypeFilterOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
         {isLoading ? (
           <LoadingSkeleton lines={8} />
-        ) : rows.length === 0 ? (
-          <EmptyState message="No transactions yet." />
+        ) : filteredRows.length === 0 ? (
+          <EmptyState message="No transactions for the selected filters." />
         ) : (
-          <DataTable
-            columns={[
-              {
-                key: 'occurredAt',
-                header: 'Date',
-                render: (row: UnifiedTransactionRow) => formatDateTime(row.occurredAt),
-              },
-              {
-                key: 'kind',
-                header: 'Kind',
-                render: (row: UnifiedTransactionRow) => row.rowKind,
-              },
-              {
-                key: 'type',
-                header: 'Type',
-                render: (row: UnifiedTransactionRow) => prettyTxType(row),
-              },
-              {
-                key: 'asset',
-                header: 'Asset',
-                render: (row: UnifiedTransactionRow) => row.assetLabel ?? '-',
-              },
-              {
-                key: 'assetType',
-                header: 'Asset Type',
-                render: (row: UnifiedTransactionRow) =>
-                  prettyAssetType(row.assetType),
-              },
-              {
-                key: 'native',
-                header: 'Amount',
-                render: (row: UnifiedTransactionRow) =>
-                  formatAmountWithCurrency(row.amountNative, row.currency),
-              },
-              {
-                key: 'cash',
-                header: 'Cash Impact EUR',
-                render: (row: UnifiedTransactionRow) => formatMoney(row.cashImpactEur),
-              },
-              {
-                key: 'actions',
-                header: 'Actions',
-                render: (row: UnifiedTransactionRow) =>
-                  row.rowKind === 'asset_transaction' ? (
-                    <Button
-                      type="button"
-                      variant="danger"
-                      size="sm"
-                      disabled={deletingTransactionId === row.id}
-                      onClick={() => void deleteTransaction(row)}
-                    >
-                      {deletingTransactionId === row.id ? 'Deleting...' : 'Delete'}
-                    </Button>
-                  ) : (
-                    '-'
-                  ),
-              },
-            ]}
-            rows={rows}
-            rowKey={(row) => row.id}
-          />
+          <>
+            <DataTable
+              columns={[
+                {
+                  key: 'occurredAt',
+                  header: 'Date',
+                  render: (row: UnifiedTransactionRow) =>
+                    formatDateTime(row.occurredAt),
+                },
+                {
+                  key: 'type',
+                  header: 'Type',
+                  render: (row: UnifiedTransactionRow) => prettyTxType(row),
+                },
+                {
+                  key: 'asset',
+                  header: 'Asset',
+                  render: (row: UnifiedTransactionRow) => getAssetName(row),
+                },
+                {
+                  key: 'assetType',
+                  header: 'Asset Type',
+                  render: (row: UnifiedTransactionRow) =>
+                    prettyAssetType(row.assetType),
+                },
+                {
+                  key: 'native',
+                  header: 'Amount',
+                  render: (row: UnifiedTransactionRow) =>
+                    formatAmountWithCurrency(row.amountNative, row.currency),
+                },
+                {
+                  key: 'cash',
+                  header: 'Cash Impact EUR',
+                  render: (row: UnifiedTransactionRow) =>
+                    formatMoney(row.cashImpactEur),
+                },
+                {
+                  key: 'actions',
+                  header: 'Actions',
+                  render: (row: UnifiedTransactionRow) =>
+                    row.rowKind === 'asset_transaction' ? (
+                      <Button
+                        type="button"
+                        variant="danger"
+                        size="sm"
+                        disabled={deletingTransactionId === row.id}
+                        onClick={() => void deleteTransaction(row)}
+                      >
+                        {deletingTransactionId === row.id
+                          ? 'Deleting...'
+                          : 'Delete'}
+                      </Button>
+                    ) : (
+                      '-'
+                    ),
+                },
+              ]}
+              rows={paginatedRows}
+              rowKey={(row) => row.id}
+            />
+            <div className="mt-3 flex items-center justify-between gap-3 text-sm text-muted-foreground">
+              <p>
+                Showing {(activeTimelinePage - 1) * timelinePageSize + 1}-
+                {Math.min(activeTimelinePage * timelinePageSize, filteredRows.length)} of{' '}
+                {filteredRows.length}
+              </p>
+              <div className="flex items-center gap-2">
+                <label className="text-xs uppercase tracking-wide" htmlFor="timeline-page-size">
+                  Rows
+                </label>
+                <select
+                  id="timeline-page-size"
+                  className="rounded-md border border-input bg-background px-2 py-1 text-sm"
+                  value={timelinePageSize}
+                  onChange={(event) => setTimelinePageSize(Number(event.target.value))}
+                >
+                  <option value={10}>10</option>
+                  <option value={25}>25</option>
+                  <option value={50}>50</option>
+                </select>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={activeTimelinePage <= 1}
+                  onClick={() =>
+                    setTimelinePage((current) => Math.max(1, current - 1))
+                  }
+                >
+                  Previous
+                </Button>
+                <span>
+                  Page {activeTimelinePage} / {totalTimelinePages}
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  disabled={activeTimelinePage >= totalTimelinePages}
+                  onClick={() =>
+                    setTimelinePage((current) =>
+                      Math.min(totalTimelinePages, current + 1),
+                    )
+                  }
+                >
+                  Next
+                </Button>
+              </div>
+            </div>
+          </>
         )}
       </Card>
 
@@ -521,6 +766,23 @@ export function TransactionsFeature() {
         }}
       >
         <form className="grid gap-4" onSubmit={createTransaction}>
+          <div className="grid gap-1.5">
+            <label className="text-sm font-medium" htmlFor="transaction-create-mode">
+              Entry Type
+            </label>
+            <select
+              id="transaction-create-mode"
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={createMode}
+              onChange={(event) =>
+                setCreateMode(event.target.value as TransactionCreateMode)
+              }
+            >
+              <option value="asset_transaction">Asset Transaction</option>
+              <option value="deposit">Savings Deposit</option>
+            </select>
+          </div>
+
           <div className="grid gap-1.5">
             <label className="text-sm font-medium" htmlFor="transaction-account">
               Account
@@ -537,8 +799,12 @@ export function TransactionsFeature() {
               }
               required
             >
-              <option value="">Select account</option>
-              {investmentAccounts.map((account) => (
+              <option value="">
+                {createMode === 'deposit'
+                  ? 'Select savings account'
+                  : 'Select investment account'}
+              </option>
+              {createAccounts.map((account) => (
                 <option key={account.id} value={account.id}>
                   {account.name}
                 </option>
@@ -546,84 +812,91 @@ export function TransactionsFeature() {
             </select>
           </div>
 
-          <div className="grid gap-1.5 sm:grid-cols-2 sm:gap-4">
-            <div className="grid gap-1.5">
-              <label className="text-sm font-medium" htmlFor="transaction-type">
-                Transaction Type
-              </label>
-              <select
-                id="transaction-type"
-                className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-                value={form.transactionType}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    transactionType: event.target.value as AssetTransactionType,
-                  }))
-                }
-              >
-                {txTypes.map((type) => (
-                  <option key={type} value={type}>
-                    {type === 'buy'
-                      ? 'Buy'
-                      : type === 'sell'
-                        ? 'Sell'
-                        : type === 'fee'
-                          ? 'Fee'
-                          : 'Dividend'}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="grid gap-1.5">
-              <label className="text-sm font-medium" htmlFor="transaction-asset-type">
-                Type of Asset
-              </label>
-              <select
-                id="transaction-asset-type"
-                className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-                value={form.assetType}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    assetType: event.target.value as AssetType,
-                    assetId: '',
-                  }))
-                }
-              >
-                {v1AssetTypes.map((type) => (
-                  <option key={type} value={type}>
-                    {prettyAssetType(type)}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
+          {createMode === 'asset_transaction' ? (
+            <>
+              <div className="grid gap-1.5 sm:grid-cols-2 sm:gap-4">
+                <div className="grid gap-1.5">
+                  <label className="text-sm font-medium" htmlFor="transaction-type">
+                    Transaction Type
+                  </label>
+                  <select
+                    id="transaction-type"
+                    className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={form.transactionType}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        transactionType: event.target.value as AssetTransactionType,
+                      }))
+                    }
+                  >
+                    {txTypes.map((type) => (
+                      <option key={type} value={type}>
+                        {type === 'buy'
+                          ? 'Buy'
+                          : type === 'sell'
+                            ? 'Sell'
+                            : type === 'fee'
+                              ? 'Fee'
+                              : 'Dividend'}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid gap-1.5">
+                  <label
+                    className="text-sm font-medium"
+                    htmlFor="transaction-asset-type"
+                  >
+                    Type of Asset
+                  </label>
+                  <select
+                    id="transaction-asset-type"
+                    className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={form.assetType}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        assetType: event.target.value as AssetType,
+                        assetId: '',
+                      }))
+                    }
+                  >
+                    {v1AssetTypes.map((type) => (
+                      <option key={type} value={type}>
+                        {prettyAssetType(type)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
 
-          <div className="grid gap-1.5">
-            <label className="text-sm font-medium" htmlFor="transaction-asset">
-              Asset
-            </label>
-            <select
-              id="transaction-asset"
-              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-              value={form.assetId}
-              onChange={(event) =>
-                setForm((current) => ({
-                  ...current,
-                  assetId: event.target.value,
-                }))
-              }
-              required
-            >
-              <option value="">Select asset</option>
-              {filteredAssets.map((asset) => (
-                <option key={asset.id} value={asset.id}>
-                  {asset.ticker} · {asset.name}
-                </option>
-              ))}
-            </select>
-          </div>
+              <div className="grid gap-1.5">
+                <label className="text-sm font-medium" htmlFor="transaction-asset">
+                  Asset
+                </label>
+                <select
+                  id="transaction-asset"
+                  className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={form.assetId}
+                  onChange={(event) =>
+                    setForm((current) => ({
+                      ...current,
+                      assetId: event.target.value,
+                    }))
+                  }
+                  required
+                >
+                  <option value="">Select asset</option>
+                  {filteredAssets.map((asset) => (
+                    <option key={asset.id} value={asset.id}>
+                      {asset.ticker} · {asset.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </>
+          ) : null}
 
           <div className="grid gap-1.5">
             <label className="text-sm font-medium" htmlFor="transaction-traded-at">
@@ -644,7 +917,26 @@ export function TransactionsFeature() {
             />
           </div>
 
-          {form.transactionType === 'buy' || form.transactionType === 'sell' ? (
+          {createMode === 'deposit' ? (
+            <div className="grid gap-1.5">
+              <label className="text-sm font-medium" htmlFor="transaction-deposit">
+                Deposit Amount (EUR)
+              </label>
+              <input
+                id="transaction-deposit"
+                className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+                type="number"
+                step="0.01"
+                min="0.01"
+                value={depositAmount}
+                onChange={(event) => setDepositAmount(event.target.value)}
+                required
+              />
+            </div>
+          ) : null}
+
+          {createMode === 'asset_transaction' &&
+          (form.transactionType === 'buy' || form.transactionType === 'sell') ? (
             <div className="grid gap-1.5 sm:grid-cols-2 sm:gap-4">
               <div className="grid gap-1.5">
                 <label className="text-sm font-medium" htmlFor="transaction-quantity">
@@ -681,7 +973,7 @@ export function TransactionsFeature() {
             </div>
           ) : null}
 
-          {form.transactionType === 'dividend' ? (
+          {createMode === 'asset_transaction' && form.transactionType === 'dividend' ? (
             <>
               <div className="grid gap-1.5 sm:grid-cols-2 sm:gap-4">
                 <div className="grid gap-1.5">
@@ -732,68 +1024,84 @@ export function TransactionsFeature() {
             </>
           ) : null}
 
-          <div className="grid gap-1.5 sm:grid-cols-2 sm:gap-4">
+          {createMode === 'asset_transaction' ? (
+            <>
+              <div className="grid gap-1.5 sm:grid-cols-2 sm:gap-4">
+                <div className="grid gap-1.5">
+                  <label className="text-sm font-medium" htmlFor="transaction-currency">
+                    Currency
+                  </label>
+                  <select
+                    id="transaction-currency"
+                    className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={form.tradeCurrency}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        tradeCurrency: event.target.value,
+                        fxRateToEur:
+                          event.target.value === 'EUR' ? '' : current.fxRateToEur,
+                      }))
+                    }
+                    required
+                  >
+                    <option value="EUR">EUR</option>
+                    <option value="USD">USD</option>
+                  </select>
+                </div>
+                <div className="grid gap-1.5">
+                  <label className="text-sm font-medium" htmlFor="transaction-fx-rate">
+                    FX Rate (to EUR)
+                  </label>
+                  <input
+                    id="transaction-fx-rate"
+                    className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={form.fxRateToEur}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        fxRateToEur: event.target.value,
+                      }))
+                    }
+                    disabled={form.tradeCurrency === 'EUR'}
+                    required={form.tradeCurrency !== 'EUR'}
+                  />
+                </div>
+              </div>
+
+              {form.transactionType !== 'dividend' ? (
+                <div className="grid gap-1.5">
+                  <label className="text-sm font-medium" htmlFor="transaction-fees">
+                    Fees (EUR)
+                  </label>
+                  <input
+                    id="transaction-fees"
+                    className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+                    value={form.feesAmount}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        feesAmount: event.target.value,
+                        feesCurrency: 'EUR',
+                      }))
+                    }
+                  />
+                </div>
+              ) : null}
+            </>
+          ) : (
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium" htmlFor="transaction-currency">
+              <label className="text-sm font-medium" htmlFor="transaction-deposit-currency">
                 Currency
               </label>
-              <select
-                id="transaction-currency"
-                className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-                value={form.tradeCurrency}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    tradeCurrency: event.target.value,
-                    fxRateToEur:
-                      event.target.value === 'EUR' ? '' : current.fxRateToEur,
-                  }))
-                }
-                required
-              >
-                <option value="EUR">EUR</option>
-                <option value="USD">USD</option>
-              </select>
-            </div>
-            <div className="grid gap-1.5">
-              <label className="text-sm font-medium" htmlFor="transaction-fx-rate">
-                FX Rate (to EUR)
-              </label>
               <input
-                id="transaction-fx-rate"
-                className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-                value={form.fxRateToEur}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    fxRateToEur: event.target.value,
-                  }))
-                }
-                disabled={form.tradeCurrency === 'EUR'}
-                required={form.tradeCurrency !== 'EUR'}
+                id="transaction-deposit-currency"
+                className="rounded-md border border-input bg-muted/30 px-3 py-2 text-sm text-muted-foreground"
+                value="EUR"
+                disabled
               />
             </div>
-          </div>
-
-          {form.transactionType !== 'dividend' ? (
-            <div className="grid gap-1.5">
-              <label className="text-sm font-medium" htmlFor="transaction-fees">
-                Fees (EUR)
-              </label>
-              <input
-                id="transaction-fees"
-                className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-                value={form.feesAmount}
-                onChange={(event) =>
-                  setForm((current) => ({
-                    ...current,
-                    feesAmount: event.target.value,
-                    feesCurrency: 'EUR',
-                  }))
-                }
-              />
-            </div>
-          ) : null}
+          )}
 
           <div className="grid gap-1.5">
             <label className="text-sm font-medium" htmlFor="transaction-notes">
@@ -816,18 +1124,30 @@ export function TransactionsFeature() {
             Cash impact preview:{' '}
             {Number.isFinite(cashImpactPreview)
               ? formatMoney(cashImpactPreview)
-              : 'requires FX'}
+              : createMode === 'deposit'
+                ? 'invalid amount'
+                : 'requires FX'}
           </p>
 
           <Button type="submit" variant="primary" disabled={isSaving} fullWidth>
-            {isSaving ? 'Saving...' : 'Create Transaction'}
+            {isSaving
+              ? 'Saving...'
+              : createMode === 'deposit'
+                ? 'Create Deposit'
+                : 'Create Transaction'}
           </Button>
         </form>
       </Modal>
 
       <Modal
         open={isImportModalOpen}
-        title="Import DEGIRO Transactions CSV"
+        title={`Import ${
+          importSource === 'degiro'
+            ? 'DEGIRO'
+            : importSource === 'binance'
+              ? 'Binance'
+              : 'COBAS'
+        } Transactions CSV`}
         onClose={() => {
           if (!isImporting) {
             setIsImportModalOpen(false);
@@ -835,6 +1155,25 @@ export function TransactionsFeature() {
         }}
       >
         <form className="grid gap-4" onSubmit={runImport}>
+          <div className="grid gap-1.5">
+            <label className="text-sm font-medium" htmlFor="import-source">
+              Source
+            </label>
+            <select
+              id="import-source"
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={importSource}
+              onChange={(event) => {
+                setImportSource(event.target.value as ImportSource);
+                setImportResult(null);
+              }}
+            >
+              <option value="degiro">DEGIRO</option>
+              <option value="binance">Binance</option>
+              <option value="cobas">COBAS</option>
+            </select>
+          </div>
+
           <div className="grid gap-1.5">
             <label className="text-sm font-medium" htmlFor="import-account">
               Account
@@ -846,8 +1185,14 @@ export function TransactionsFeature() {
               onChange={(event) => setImportAccountId(event.target.value)}
               required
             >
-              <option value="">Select investment account</option>
-              {investmentAccounts.map((account) => (
+              <option value="">
+                {importSource === 'degiro'
+                  ? 'Select brokerage account'
+                  : importSource === 'binance'
+                    ? 'Select exchange account'
+                    : 'Select investment fund account'}
+              </option>
+              {importAccounts.map((account) => (
                 <option key={account.id} value={account.id}>
                   {account.name}
                 </option>
@@ -890,7 +1235,13 @@ export function TransactionsFeature() {
         {importResult ? (
           <div className="mt-4 space-y-3">
             <p className="text-xs text-muted-foreground">
-              Source: DEGIRO Transactions ·{' '}
+              Source:{' '}
+              {importResult.source === 'degiro'
+                ? 'DEGIRO Transactions'
+                : importResult.source === 'binance'
+                  ? 'Binance Transactions'
+                  : 'COBAS Transactions'}{' '}
+              ·{' '}
               {importResult.dryRun ? 'Dry run' : 'Committed'} · Rows{' '}
               {importResult.totalRows}
             </p>
@@ -922,6 +1273,23 @@ export function TransactionsFeature() {
           </div>
         ) : null}
       </Modal>
+
+      <ConfirmModal
+        open={Boolean(confirmDeleteTransaction)}
+        title="Delete Transaction"
+        description={
+          confirmDeleteTransaction
+            ? `Delete ${prettyTxType(confirmDeleteTransaction)} transaction from ${formatDateTime(
+                confirmDeleteTransaction.occurredAt,
+              )}?`
+            : ''
+        }
+        confirmLabel="Delete Transaction"
+        confirmVariant="danger"
+        isLoading={Boolean(deletingTransactionId)}
+        onCancel={() => setConfirmDeleteTransaction(null)}
+        onConfirm={() => void confirmDelete()}
+      />
     </div>
   );
 }

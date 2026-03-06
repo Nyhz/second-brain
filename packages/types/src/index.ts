@@ -168,6 +168,91 @@ export type CreateAssetTransactionInput = z.infer<
   typeof createAssetTransactionInputSchema
 >;
 
+export const createAccountCashMovementInputSchema = z.object({
+  accountId: z.string().uuid(),
+  movementType: z.literal('deposit').default('deposit'),
+  occurredAt: z.string(),
+  nativeAmount: z.number().positive(),
+  currency: z.literal('EUR').default('EUR'),
+  notes: z.string().trim().min(1).nullable().optional(),
+});
+
+export type CreateAccountCashMovementInput = z.infer<
+  typeof createAccountCashMovementInputSchema
+>;
+
+export const binanceImportRowResultSchema = z.object({
+  rowNumber: z.number().int().positive(),
+  status: z.enum(['imported', 'skipped', 'failed']),
+  reason: z.string().nullable().optional(),
+  externalReference: z.string().nullable().optional(),
+  assetId: z.string().uuid().nullable().optional(),
+  transactionId: z.string().uuid().nullable().optional(),
+});
+
+export type BinanceImportRowResult = z.infer<
+  typeof binanceImportRowResultSchema
+>;
+
+export const binanceImportRequestSchema = z.object({
+  accountId: z.string().uuid(),
+  fileName: z.string().trim().min(1),
+  csvText: z.string().trim().min(1),
+  dryRun: z.boolean().default(true),
+});
+
+export type BinanceImportRequest = z.infer<typeof binanceImportRequestSchema>;
+
+export const binanceImportResultSchema = z.object({
+  importId: z.string().uuid(),
+  source: z.literal('binance'),
+  fileName: z.string(),
+  fileHash: z.string(),
+  dryRun: z.boolean(),
+  totalRows: z.number().int().nonnegative(),
+  importedRows: z.number().int().nonnegative(),
+  skippedRows: z.number().int().nonnegative(),
+  failedRows: z.number().int().nonnegative(),
+  results: z.array(binanceImportRowResultSchema),
+});
+
+export type BinanceImportResult = z.infer<typeof binanceImportResultSchema>;
+
+export const cobasImportRowResultSchema = z.object({
+  rowNumber: z.number().int().positive(),
+  status: z.enum(['imported', 'skipped', 'failed']),
+  reason: z.string().nullable().optional(),
+  externalReference: z.string().nullable().optional(),
+  assetId: z.string().uuid().nullable().optional(),
+  transactionId: z.string().uuid().nullable().optional(),
+});
+
+export type CobasImportRowResult = z.infer<typeof cobasImportRowResultSchema>;
+
+export const cobasImportRequestSchema = z.object({
+  accountId: z.string().uuid(),
+  fileName: z.string().trim().min(1),
+  csvText: z.string().trim().min(1),
+  dryRun: z.boolean().default(true),
+});
+
+export type CobasImportRequest = z.infer<typeof cobasImportRequestSchema>;
+
+export const cobasImportResultSchema = z.object({
+  importId: z.string().uuid(),
+  source: z.literal('cobas'),
+  fileName: z.string(),
+  fileHash: z.string(),
+  dryRun: z.boolean(),
+  totalRows: z.number().int().nonnegative(),
+  importedRows: z.number().int().nonnegative(),
+  skippedRows: z.number().int().nonnegative(),
+  failedRows: z.number().int().nonnegative(),
+  results: z.array(cobasImportRowResultSchema),
+});
+
+export type CobasImportResult = z.infer<typeof cobasImportResultSchema>;
+
 export const degiroImportRowResultSchema = z.object({
   rowNumber: z.number().int().positive(),
   status: z.enum(['imported', 'skipped', 'failed']),
@@ -520,6 +605,15 @@ export type OverviewRange = z.infer<typeof overviewRangeSchema>;
 export const overviewAccountSchema = z.object({
   id: z.string().uuid(),
   name: z.string().min(1),
+  accountType: z.enum([
+    'brokerage',
+    'crypto_exchange',
+    'investment_platform',
+    'checking',
+    'savings',
+    'cash',
+    'credit',
+  ]),
 });
 export type OverviewAccount = z.infer<typeof overviewAccountSchema>;
 

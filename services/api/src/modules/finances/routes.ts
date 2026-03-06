@@ -13,22 +13,29 @@ import {
   transactionImports,
 } from '@second-brain/db';
 import {
+  type Account,
   type Asset,
   type AssetPosition,
   type AssetTransaction,
   type AssetType,
+  type BinanceImportResult,
+  type CobasImportResult,
   type DegiroAccountStatementAnalyzeResult,
   type DegiroAccountStatementImportResult,
   type CreateAssetTransactionInput,
+  type CreateAccountCashMovementInput,
   type DegiroImportResult,
   type FinancesOverviewResponse,
   type UnifiedTransactionRow,
   type OverviewRange,
+  binanceImportRequestSchema,
+  cobasImportRequestSchema,
   createAssetInputSchema,
   createAssetTransactionInputSchema,
   degiroAccountStatementAnalyzeRequestSchema,
   degiroAccountStatementImportRequestSchema,
   createAccountInputSchema,
+  createAccountCashMovementInputSchema,
   degiroImportRequestSchema,
   overviewRangeSchema,
   updateAssetInputSchema,
@@ -37,6 +44,8 @@ import {
 import type { Elysia } from 'elysia';
 import { withTimedDb } from '../../lib/db-timed';
 import { ApiHttpError } from '../../lib/errors';
+import { parseBinanceTransactionsCsv } from './binance-import';
+import { parseCobasTransactionsCsv } from './cobas-import';
 import { parseDegiroTransactionsCsv } from './degiro-import';
 import {
   type DegiroAccountStatementRow,
@@ -184,7 +193,11 @@ const serializeAssetTransaction = (
 const round2 = (value: number) => Number(value.toFixed(2));
 const EURUSD_FX_SYMBOL = 'EURUSD=X';
 const RETURN_PCT_MIN_BASELINE_EUR = 1;
-const INVESTMENT_ACCOUNT_TYPES = new Set(['brokerage', 'crypto_exchange']);
+const INVESTMENT_ACCOUNT_TYPES = new Set([
+  'brokerage',
+  'crypto_exchange',
+  'investment_platform',
+]);
 const SAVINGS_ACCOUNT_TYPE = 'savings';
 
 const OVERVIEW_RANGES: OverviewRange[] = ['1W', '1M', 'YTD', '1Y', 'MAX'];
@@ -195,6 +208,8 @@ const UUID_RE =
 const round6 = (value: number) => Number(value.toFixed(6));
 const DEGIRO_ACCOUNT_STATEMENT_SOURCE = 'degiro_account_statement';
 const DEGIRO_TRANSACTIONS_SOURCE = 'degiro';
+const BINANCE_TRANSACTIONS_SOURCE = 'binance';
+const COBAS_TRANSACTIONS_SOURCE = 'cobas';
 
 const isInvestmentAccountType = (accountType: string | null | undefined) =>
   accountType !== null &&
@@ -1249,6 +1264,76 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     return created;
   });
 
+  app.post('/finances/account-cash-movements', async ({ body, set }) => {
+    const parsed = createAccountCashMovementInputSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new ApiHttpError(
+        400,
+        'VALIDATION_ERROR',
+        'Invalid account cash movement payload',
+        parsed.error.format(),
+      );
+    }
+
+    const input: CreateAccountCashMovementInput = parsed.data;
+    const occurredAt = new Date(input.occurredAt);
+    if (Number.isNaN(occurredAt.valueOf())) {
+      throw new ApiHttpError(
+        400,
+        'VALIDATION_ERROR',
+        'occurredAt must be a valid ISO datetime.',
+      );
+    }
+
+    const [accountRow] = await withTimedDb(
+      'account_cash_movement_account_exists',
+      async () => {
+        return db
+          .select({ id: accounts.id, accountType: accounts.accountType })
+          .from(accounts)
+          .where(eq(accounts.id, input.accountId));
+      },
+    );
+
+    if (!accountRow) {
+      throw new ApiHttpError(
+        404,
+        'ACCOUNT_NOT_FOUND',
+        'Account does not exist',
+      );
+    }
+
+    if (!isSavingsAccountType(String(accountRow.accountType))) {
+      throw new ApiHttpError(
+        400,
+        'ACCOUNT_TYPE_NOT_SUPPORTED',
+        'Manual deposits are only supported for savings accounts.',
+      );
+    }
+
+    const movementId = await createAccountCashMovementRecord({
+      accountId: input.accountId,
+      movementType: input.movementType,
+      occurredAt: occurredAt.toISOString(),
+      valueDate: null,
+      nativeAmount: input.nativeAmount,
+      currency: input.currency,
+      fxRateToEur: null,
+      cashImpactEur: round2(input.nativeAmount),
+      externalReference: null,
+      rowFingerprint: null,
+      source: 'manual',
+      description: input.notes ?? 'Manual deposit',
+      rawPayload: {
+        movementType: input.movementType,
+      },
+      affectsCashBalance: true,
+    });
+
+    set.status = 201;
+    return { id: movementId };
+  });
+
   app.delete('/finances/asset-transactions/:id', async ({ params, set }) => {
     const rows = await withTimedDb('delete_asset_transaction', async () => {
       return db
@@ -1303,11 +1388,11 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         'Account does not exist',
       );
     }
-    if (!isInvestmentAccountType(String(accountRow.accountType))) {
+    if (String(accountRow.accountType) !== 'brokerage') {
       throw new ApiHttpError(
         400,
         'IMPORT_ACCOUNT_TYPE_NOT_SUPPORTED',
-        'DEGIRO transactions import is only supported for brokerage and exchange accounts.',
+        'DEGIRO transactions import is only supported for brokerage accounts.',
       );
     }
 
@@ -1605,6 +1690,761 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       failedRows,
       results,
     } satisfies DegiroImportResult;
+  });
+
+  app.post('/finances/import/binance-transactions', async ({ body }) => {
+    const parsed = binanceImportRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new ApiHttpError(
+        400,
+        'VALIDATION_ERROR',
+        'Invalid Binance import payload',
+        parsed.error.format(),
+      );
+    }
+
+    const csvBytes = new TextEncoder().encode(parsed.data.csvText).byteLength;
+    if (csvBytes > 5 * 1024 * 1024) {
+      throw new ApiHttpError(
+        400,
+        'CSV_TOO_LARGE',
+        'CSV file is larger than 5MB limit.',
+      );
+    }
+
+    const [accountRow] = await withTimedDb(
+      'binance_import_account_exists',
+      async () => {
+        return db
+          .select({ id: accounts.id, accountType: accounts.accountType })
+          .from(accounts)
+          .where(eq(accounts.id, parsed.data.accountId));
+      },
+    );
+    if (!accountRow) {
+      throw new ApiHttpError(
+        404,
+        'ACCOUNT_NOT_FOUND',
+        'Account does not exist',
+      );
+    }
+    if (String(accountRow.accountType) !== 'crypto_exchange') {
+      throw new ApiHttpError(
+        400,
+        'IMPORT_ACCOUNT_TYPE_NOT_SUPPORTED',
+        'Binance import is only supported for exchange accounts.',
+      );
+    }
+
+    const fileHash = await sha256Hex(parsed.data.csvText);
+    const [importRun] = await withTimedDb(
+      'binance_create_import_run',
+      async () => {
+        return db
+          .insert(transactionImports)
+          .values({
+            source: BINANCE_TRANSACTIONS_SOURCE,
+            accountId: parsed.data.accountId,
+            filename: parsed.data.fileName,
+            fileHash,
+            dryRun: parsed.data.dryRun,
+          })
+          .returning();
+      },
+    );
+
+    if (!importRun) {
+      throw new ApiHttpError(
+        500,
+        'INTERNAL_ERROR',
+        'Failed to initialize import run',
+      );
+    }
+
+    let parsedCsv: ReturnType<typeof parseBinanceTransactionsCsv>;
+    try {
+      parsedCsv = parseBinanceTransactionsCsv(parsed.data.csvText);
+    } catch (error) {
+      await withTimedDb('binance_import_mark_failed_parse', async () => {
+        return db
+          .update(transactionImports)
+          .set({
+            totalRows: 0,
+            importedRows: 0,
+            skippedRows: 0,
+            failedRows: 1,
+            updatedAt: new Date(),
+          })
+          .where(eq(transactionImports.id, importRun.id));
+      });
+      throw new ApiHttpError(
+        400,
+        'UNSUPPORTED_BINANCE_CSV',
+        error instanceof Error
+          ? error.message
+          : 'Unsupported Binance CSV format.',
+      );
+    }
+
+    const readyRows = parsedCsv.rows.filter(
+      (row) => row.status === 'ready' && row.normalized !== null,
+    );
+    const symbols = [...new Set(readyRows.map((row) => row.normalized!.assetSymbol))];
+    const symbolLookup = new Map<string, { id: string; assetType: AssetType }>();
+
+    if (symbols.length > 0) {
+      const assetRows = await withTimedDb(
+        'binance_import_asset_lookup_symbols',
+        async () => {
+          return db.execute(sql`
+            select
+              id,
+              asset_type as "assetType",
+              upper(coalesce(symbol, '')) as symbol,
+              upper(coalesce(ticker, '')) as ticker
+            from finances.assets
+            where asset_type = 'crypto'
+              and (
+                upper(coalesce(symbol, '')) in (${sql.join(
+                  symbols.map((symbol) => sql`${symbol}`),
+                  sql`, `,
+                )})
+                or upper(coalesce(ticker, '')) in (${sql.join(
+                  symbols.map((symbol) => sql`${symbol}`),
+                  sql`, `,
+                )})
+              )
+          `);
+        },
+      );
+
+      for (const row of assetRows) {
+        const entry = {
+          id: String(row.id),
+          assetType: String(row.assetType) as AssetType,
+        };
+        const symbol = String(row.symbol ?? '');
+        const ticker = String(row.ticker ?? '');
+        if (symbol) {
+          symbolLookup.set(symbol, entry);
+        }
+        if (ticker) {
+          symbolLookup.set(ticker, entry);
+        }
+      }
+    }
+
+    const missingSymbols = symbols.filter((symbol) => !symbolLookup.has(symbol));
+    if (missingSymbols.length > 0) {
+      await withTimedDb('binance_import_mark_failed_unknown_symbols', async () => {
+        return db
+          .update(transactionImports)
+          .set({
+            totalRows: parsedCsv.rows.length,
+            importedRows: 0,
+            skippedRows: 0,
+            failedRows: parsedCsv.rows.length,
+            updatedAt: new Date(),
+          })
+          .where(eq(transactionImports.id, importRun.id));
+      });
+      throw new ApiHttpError(
+        400,
+        'UNKNOWN_ASSET_SYMBOL',
+        `Unknown asset symbols in import: ${missingSymbols.join(', ')}`,
+        { missingSymbols },
+      );
+    }
+
+    const results: BinanceImportResult['results'] = [];
+    let importedRows = 0;
+    let skippedRows = 0;
+    let failedRows = 0;
+
+    for (const row of parsedCsv.rows) {
+      if (row.status === 'skipped') {
+        skippedRows += 1;
+        results.push({
+          rowNumber: row.rowNumber,
+          status: 'skipped',
+          reason: row.reason ?? 'Skipped row.',
+          externalReference: row.raw.orderNo || null,
+          assetId: null,
+          transactionId: null,
+        });
+        continue;
+      }
+
+      if (!row.normalized || row.status === 'failed') {
+        failedRows += 1;
+        results.push({
+          rowNumber: row.rowNumber,
+          status: 'failed',
+          reason: row.reason ?? 'Invalid row.',
+          externalReference: row.raw.orderNo || null,
+          assetId: null,
+          transactionId: null,
+        });
+        continue;
+      }
+
+      const asset = symbolLookup.get(row.normalized.assetSymbol) ?? null;
+      if (!asset) {
+        failedRows += 1;
+        results.push({
+          rowNumber: row.rowNumber,
+          status: 'failed',
+          reason: `Unknown asset symbol: ${row.normalized.assetSymbol}`,
+          externalReference: row.normalized.externalReference,
+          assetId: null,
+          transactionId: null,
+        });
+        continue;
+      }
+
+      const [existingTx] = await withTimedDb(
+        'binance_import_dedupe_ref',
+        async () => {
+          return db
+            .select({ id: assetTransactions.id })
+            .from(assetTransactions)
+            .where(
+              and(
+                eq(assetTransactions.accountId, parsed.data.accountId),
+                eq(
+                  assetTransactions.externalReference,
+                  row.normalized?.externalReference ?? '',
+                ),
+              ),
+            );
+        },
+      );
+
+      if (existingTx) {
+        skippedRows += 1;
+        results.push({
+          rowNumber: row.rowNumber,
+          status: 'skipped',
+          reason: 'Duplicate external reference for this account.',
+          externalReference: row.normalized.externalReference,
+          assetId: asset.id,
+          transactionId: String(existingTx.id),
+        });
+        continue;
+      }
+
+      const payload: CreateAssetTransactionInput = {
+        accountId: parsed.data.accountId,
+        assetId: asset.id,
+        assetType: 'crypto',
+        transactionType: row.normalized.transactionType,
+        tradedAt: row.normalized.tradedAt,
+        quantity: row.normalized.quantity,
+        unitPrice: row.normalized.unitPrice,
+        tradeCurrency: 'EUR',
+        fxRateToEur: null,
+        feesAmount: 0,
+        feesCurrency: 'EUR',
+        externalReference: row.normalized.externalReference,
+        notes: `Imported from Binance CSV (${parsed.data.fileName}).`,
+      };
+
+      const validation = createAssetTransactionInputSchema.safeParse(payload);
+      if (!validation.success) {
+        failedRows += 1;
+        results.push({
+          rowNumber: row.rowNumber,
+          status: 'failed',
+          reason: 'Normalized row failed validation.',
+          externalReference: row.normalized.externalReference,
+          assetId: asset.id,
+          transactionId: null,
+        });
+        continue;
+      }
+
+      if (parsed.data.dryRun) {
+        skippedRows += 1;
+        results.push({
+          rowNumber: row.rowNumber,
+          status: 'skipped',
+          reason: 'Dry run: row validated but not inserted.',
+          externalReference: row.normalized.externalReference,
+          assetId: asset.id,
+          transactionId: null,
+        });
+        continue;
+      }
+
+      try {
+        const cashImpactEurOverride =
+          row.normalized.transactionType === 'buy'
+            ? -Math.abs(row.normalized.tradingTotalEur)
+            : Math.abs(row.normalized.tradingTotalEur);
+
+        const created = await createAssetTransactionRecord(validation.data, {
+          cashImpactEurOverride: round2(cashImpactEurOverride),
+          source: BINANCE_TRANSACTIONS_SOURCE,
+        });
+        importedRows += 1;
+        results.push({
+          rowNumber: row.rowNumber,
+          status: 'imported',
+          reason: null,
+          externalReference: row.normalized.externalReference,
+          assetId: asset.id,
+          transactionId: created.id,
+        });
+      } catch (error) {
+        failedRows += 1;
+        results.push({
+          rowNumber: row.rowNumber,
+          status: 'failed',
+          reason:
+            error instanceof Error
+              ? error.message
+              : 'Failed to create transaction.',
+          externalReference: row.normalized.externalReference,
+          assetId: asset.id,
+          transactionId: null,
+        });
+      }
+    }
+
+    if (results.length > 0) {
+      await withTimedDb('binance_import_rows_insert', async () => {
+        return db.insert(transactionImportRows).values(
+          results.map((result) => ({
+            importId: importRun.id,
+            rowNumber: result.rowNumber,
+            status: result.status,
+            errorCode:
+              result.status === 'failed'
+                ? 'ROW_IMPORT_FAILED'
+                : result.status === 'skipped'
+                  ? 'ROW_SKIPPED'
+                  : null,
+            errorMessage: result.reason ?? null,
+            externalReference: result.externalReference ?? null,
+            assetId: result.assetId ?? null,
+            transactionId: result.transactionId ?? null,
+            rawPayload:
+              parsedCsv.rows.find((row) => row.rowNumber === result.rowNumber)
+                ?.raw ?? {},
+          })),
+        );
+      });
+    }
+
+    await withTimedDb('binance_import_run_finalize', async () => {
+      return db
+        .update(transactionImports)
+        .set({
+          totalRows: parsedCsv.rows.length,
+          importedRows,
+          skippedRows,
+          failedRows,
+          updatedAt: new Date(),
+        })
+        .where(eq(transactionImports.id, importRun.id));
+    });
+
+    return {
+      importId: String(importRun.id),
+      source: BINANCE_TRANSACTIONS_SOURCE,
+      fileName: parsed.data.fileName,
+      fileHash,
+      dryRun: parsed.data.dryRun,
+      totalRows: parsedCsv.rows.length,
+      importedRows,
+      skippedRows,
+      failedRows,
+      results,
+    } satisfies BinanceImportResult;
+  });
+
+  app.post('/finances/import/cobas-transactions', async ({ body }) => {
+    const parsed = cobasImportRequestSchema.safeParse(body);
+    if (!parsed.success) {
+      throw new ApiHttpError(
+        400,
+        'VALIDATION_ERROR',
+        'Invalid COBAS import payload',
+        parsed.error.format(),
+      );
+    }
+
+    const csvBytes = new TextEncoder().encode(parsed.data.csvText).byteLength;
+    if (csvBytes > 5 * 1024 * 1024) {
+      throw new ApiHttpError(
+        400,
+        'CSV_TOO_LARGE',
+        'CSV file is larger than 5MB limit.',
+      );
+    }
+
+    const [accountRow] = await withTimedDb(
+      'cobas_import_account_exists',
+      async () => {
+        return db
+          .select({ id: accounts.id, accountType: accounts.accountType })
+          .from(accounts)
+          .where(eq(accounts.id, parsed.data.accountId));
+      },
+    );
+    if (!accountRow) {
+      throw new ApiHttpError(
+        404,
+        'ACCOUNT_NOT_FOUND',
+        'Account does not exist',
+      );
+    }
+    if (String(accountRow.accountType) !== 'investment_platform') {
+      throw new ApiHttpError(
+        400,
+        'IMPORT_ACCOUNT_TYPE_NOT_SUPPORTED',
+        'COBAS import is only supported for investment fund accounts.',
+      );
+    }
+
+    const fileHash = await sha256Hex(parsed.data.csvText);
+    const [importRun] = await withTimedDb('cobas_create_import_run', async () => {
+      return db
+        .insert(transactionImports)
+        .values({
+          source: COBAS_TRANSACTIONS_SOURCE,
+          accountId: parsed.data.accountId,
+          filename: parsed.data.fileName,
+          fileHash,
+          dryRun: parsed.data.dryRun,
+        })
+        .returning();
+    });
+
+    if (!importRun) {
+      throw new ApiHttpError(
+        500,
+        'INTERNAL_ERROR',
+        'Failed to initialize import run',
+      );
+    }
+
+    let parsedCsv: ReturnType<typeof parseCobasTransactionsCsv>;
+    try {
+      parsedCsv = parseCobasTransactionsCsv(parsed.data.csvText);
+    } catch (error) {
+      await withTimedDb('cobas_import_mark_failed_parse', async () => {
+        return db
+          .update(transactionImports)
+          .set({
+            totalRows: 0,
+            importedRows: 0,
+            skippedRows: 0,
+            failedRows: 1,
+            updatedAt: new Date(),
+          })
+          .where(eq(transactionImports.id, importRun.id));
+      });
+      throw new ApiHttpError(
+        400,
+        'UNSUPPORTED_COBAS_CSV',
+        error instanceof Error ? error.message : 'Unsupported COBAS CSV format.',
+      );
+    }
+
+    const readyRows = parsedCsv.rows.filter(
+      (row) => row.status === 'ready' && row.normalized !== null,
+    );
+    const symbolHints = [
+      ...new Set(readyRows.map((row) => row.normalized!.symbolHint)),
+    ];
+
+    const symbolMatches = new Map<string, { id: string; assetType: AssetType }[]>();
+    if (symbolHints.length > 0) {
+      const assetRows = await withTimedDb(
+        'cobas_import_asset_lookup_symbols',
+        async () => {
+          return db.execute(sql`
+            select
+              id,
+              asset_type as "assetType",
+              upper(coalesce(symbol, '')) as symbol,
+              upper(coalesce(ticker, '')) as ticker
+            from finances.assets
+            where upper(coalesce(symbol, '')) in (${sql.join(
+              symbolHints.map((symbol) => sql`${symbol}`),
+              sql`, `,
+            )})
+            or upper(coalesce(ticker, '')) in (${sql.join(
+              symbolHints.map((symbol) => sql`${symbol}`),
+              sql`, `,
+            )})
+          `);
+        },
+      );
+
+      for (const hint of symbolHints) {
+        symbolMatches.set(hint, []);
+      }
+      for (const row of assetRows) {
+        const entry = {
+          id: String(row.id),
+          assetType: String(row.assetType) as AssetType,
+        };
+        const symbol = String(row.symbol ?? '');
+        const ticker = String(row.ticker ?? '');
+        for (const key of [symbol, ticker]) {
+          if (!key || !symbolMatches.has(key)) {
+            continue;
+          }
+          const current = symbolMatches.get(key) ?? [];
+          if (!current.some((item) => item.id === entry.id)) {
+            current.push(entry);
+            symbolMatches.set(key, current);
+          }
+        }
+      }
+    }
+
+    const missingSymbols = symbolHints.filter(
+      (hint) => (symbolMatches.get(hint) ?? []).length === 0,
+    );
+    const ambiguousSymbols = symbolHints.filter(
+      (hint) => (symbolMatches.get(hint) ?? []).length > 1,
+    );
+
+    if (missingSymbols.length > 0 || ambiguousSymbols.length > 0) {
+      await withTimedDb('cobas_import_mark_failed_symbols', async () => {
+        return db
+          .update(transactionImports)
+          .set({
+            totalRows: parsedCsv.rows.length,
+            importedRows: 0,
+            skippedRows: 0,
+            failedRows: parsedCsv.rows.length,
+            updatedAt: new Date(),
+          })
+          .where(eq(transactionImports.id, importRun.id));
+      });
+
+      if (missingSymbols.length > 0) {
+        throw new ApiHttpError(
+          400,
+          'UNKNOWN_ASSET_SYMBOL',
+          `Unknown asset symbols in import: ${missingSymbols.join(', ')}`,
+          { missingSymbols },
+        );
+      }
+
+      throw new ApiHttpError(
+        400,
+        'AMBIGUOUS_ASSET_SYMBOL',
+        `Ambiguous asset symbols in import: ${ambiguousSymbols.join(', ')}`,
+        { ambiguousSymbols },
+      );
+    }
+
+    const results: CobasImportResult['results'] = [];
+    let importedRows = 0;
+    let skippedRows = 0;
+    let failedRows = 0;
+
+    for (const row of parsedCsv.rows) {
+      if (row.status === 'skipped') {
+        skippedRows += 1;
+        results.push({
+          rowNumber: row.rowNumber,
+          status: 'skipped',
+          reason: row.reason ?? 'Skipped row.',
+          externalReference: row.raw.operation || null,
+          assetId: null,
+          transactionId: null,
+        });
+        continue;
+      }
+
+      if (row.status === 'failed' || !row.normalized) {
+        failedRows += 1;
+        results.push({
+          rowNumber: row.rowNumber,
+          status: 'failed',
+          reason: row.reason ?? 'Invalid row.',
+          externalReference: row.raw.operation || null,
+          assetId: null,
+          transactionId: null,
+        });
+        continue;
+      }
+
+      const matched = symbolMatches.get(row.normalized.symbolHint) ?? [];
+      const asset = matched[0] ?? null;
+      if (!asset) {
+        failedRows += 1;
+        results.push({
+          rowNumber: row.rowNumber,
+          status: 'failed',
+          reason: `Unknown asset symbol: ${row.normalized.symbolHint}`,
+          externalReference: row.normalized.externalReference,
+          assetId: null,
+          transactionId: null,
+        });
+        continue;
+      }
+
+      const [existingTx] = await withTimedDb(
+        'cobas_import_dedupe_ref',
+        async () => {
+          return db
+            .select({ id: assetTransactions.id })
+            .from(assetTransactions)
+            .where(
+              and(
+                eq(assetTransactions.accountId, parsed.data.accountId),
+                eq(
+                  assetTransactions.externalReference,
+                  row.normalized?.externalReference ?? '',
+                ),
+              ),
+            );
+        },
+      );
+
+      if (existingTx) {
+        skippedRows += 1;
+        results.push({
+          rowNumber: row.rowNumber,
+          status: 'skipped',
+          reason: 'Duplicate external reference for this account.',
+          externalReference: row.normalized.externalReference,
+          assetId: asset.id,
+          transactionId: String(existingTx.id),
+        });
+        continue;
+      }
+
+      const payload: CreateAssetTransactionInput = {
+        accountId: parsed.data.accountId,
+        assetId: asset.id,
+        assetType: asset.assetType,
+        transactionType: 'buy',
+        tradedAt: row.normalized.tradedAt,
+        quantity: row.normalized.quantity,
+        unitPrice: row.normalized.unitPrice,
+        tradeCurrency: 'EUR',
+        fxRateToEur: null,
+        feesAmount: row.normalized.feesAmount,
+        feesCurrency: 'EUR',
+        externalReference: row.normalized.externalReference,
+        notes: `Imported from COBAS CSV (${parsed.data.fileName}).`,
+      };
+
+      const validation = createAssetTransactionInputSchema.safeParse(payload);
+      if (!validation.success) {
+        failedRows += 1;
+        results.push({
+          rowNumber: row.rowNumber,
+          status: 'failed',
+          reason: 'Normalized row failed validation.',
+          externalReference: row.normalized.externalReference,
+          assetId: asset.id,
+          transactionId: null,
+        });
+        continue;
+      }
+
+      if (parsed.data.dryRun) {
+        skippedRows += 1;
+        results.push({
+          rowNumber: row.rowNumber,
+          status: 'skipped',
+          reason: 'Dry run: row validated but not inserted.',
+          externalReference: row.normalized.externalReference,
+          assetId: asset.id,
+          transactionId: null,
+        });
+        continue;
+      }
+
+      try {
+        const created = await createAssetTransactionRecord(validation.data, {
+          cashImpactEurOverride: -Math.abs(row.normalized.netAmountEur),
+          source: COBAS_TRANSACTIONS_SOURCE,
+        });
+        importedRows += 1;
+        results.push({
+          rowNumber: row.rowNumber,
+          status: 'imported',
+          reason: null,
+          externalReference: row.normalized.externalReference,
+          assetId: asset.id,
+          transactionId: created.id,
+        });
+      } catch (error) {
+        failedRows += 1;
+        results.push({
+          rowNumber: row.rowNumber,
+          status: 'failed',
+          reason:
+            error instanceof Error
+              ? error.message
+              : 'Failed to create transaction.',
+          externalReference: row.normalized.externalReference,
+          assetId: asset.id,
+          transactionId: null,
+        });
+      }
+    }
+
+    if (results.length > 0) {
+      await withTimedDb('cobas_import_rows_insert', async () => {
+        return db.insert(transactionImportRows).values(
+          results.map((result) => ({
+            importId: importRun.id,
+            rowNumber: result.rowNumber,
+            status: result.status,
+            errorCode:
+              result.status === 'failed'
+                ? 'ROW_IMPORT_FAILED'
+                : result.status === 'skipped'
+                  ? 'ROW_SKIPPED'
+                  : null,
+            errorMessage: result.reason ?? null,
+            externalReference: result.externalReference ?? null,
+            assetId: result.assetId ?? null,
+            transactionId: result.transactionId ?? null,
+            rawPayload:
+              parsedCsv.rows.find((entry) => entry.rowNumber === result.rowNumber)
+                ?.raw ?? {},
+          })),
+        );
+      });
+    }
+
+    await withTimedDb('cobas_import_run_finalize', async () => {
+      return db
+        .update(transactionImports)
+        .set({
+          totalRows: parsedCsv.rows.length,
+          importedRows,
+          skippedRows,
+          failedRows,
+          updatedAt: new Date(),
+        })
+        .where(eq(transactionImports.id, importRun.id));
+    });
+
+    return {
+      importId: String(importRun.id),
+      source: COBAS_TRANSACTIONS_SOURCE,
+      fileName: parsed.data.fileName,
+      fileHash,
+      dryRun: parsed.data.dryRun,
+      totalRows: parsedCsv.rows.length,
+      importedRows,
+      skippedRows,
+      failedRows,
+      results,
+    } satisfies CobasImportResult;
   });
 
   app.post(
@@ -2969,11 +3809,14 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
   app.get('/finances/assets', async ({ query }) => {
     const type = query.type as string | undefined;
     const activeRaw = query.active as string | boolean | undefined;
-    const active =
-      activeRaw === undefined
-        ? true
-        : String(activeRaw).toLowerCase() === 'true';
-    return listAssetViews(type ? { type, active } : { active });
+    const filters: { type?: string; active?: boolean } = {};
+    if (type) {
+      filters.type = type;
+    }
+    if (activeRaw !== undefined) {
+      filters.active = String(activeRaw).toLowerCase() === 'true';
+    }
+    return listAssetViews(filters);
   });
 
   app.post('/finances/assets', async ({ body, set }) => {
@@ -2988,6 +3831,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     }
 
     const normalizedSymbol = parsed.data.symbol?.trim().toUpperCase();
+    const normalizedProviderSymbol = parsed.data.providerSymbol
+      ?.trim()
+      .toUpperCase();
     const normalizedSubtype = parsed.data.subtype?.trim();
     const normalizedNotes = parsed.data.notes?.trim();
     const normalizedTicker = parsed.data.ticker.trim().toUpperCase();
@@ -3003,24 +3849,93 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       );
     }
 
-    const [assetRow] = await withTimedDb('create_asset', async () => {
-      return db
-        .insert(assets)
-        .values({
-          name: parsed.data.name,
-          assetType: parsed.data.assetType,
-          subtype: normalizedSubtype || null,
-          symbol: normalizedSymbol || null,
-          ticker: normalizedTicker,
-          isin: normalizedIsin,
-          exchange: parsed.data.exchange?.trim().toUpperCase() || null,
-          providerSymbol:
-            parsed.data.providerSymbol?.trim().toUpperCase() || null,
-          currency: parsed.data.currency.toUpperCase(),
-          notes: normalizedNotes || null,
-        })
-        .returning();
-    });
+    if (parsed.data.assetType === 'crypto') {
+      const existingCryptoAssets = await withTimedDb(
+        'create_asset_crypto_duplicate_check',
+        async () =>
+          db
+            .select({
+              id: assets.id,
+              name: assets.name,
+              isActive: assets.isActive,
+              symbol: assets.symbol,
+              ticker: assets.ticker,
+              providerSymbol: assets.providerSymbol,
+            })
+            .from(assets)
+            .where(eq(assets.assetType, 'crypto')),
+      );
+
+      const duplicateAsset = existingCryptoAssets.find((row) => {
+        const rowSymbol = String(row.symbol ?? '')
+          .trim()
+          .toUpperCase();
+        const rowTicker = String(row.ticker ?? '')
+          .trim()
+          .toUpperCase();
+        const rowProviderSymbol = String(row.providerSymbol ?? '')
+          .trim()
+          .toUpperCase();
+
+        return (
+          rowTicker === normalizedTicker ||
+          (normalizedSymbol ? rowSymbol === normalizedSymbol : false) ||
+          (normalizedProviderSymbol
+            ? rowProviderSymbol === normalizedProviderSymbol
+            : false)
+        );
+      });
+
+      if (duplicateAsset) {
+        throw new ApiHttpError(
+          409,
+          'ASSET_ALREADY_EXISTS',
+          duplicateAsset.isActive
+            ? `Crypto asset already exists (${duplicateAsset.name}).`
+            : `Crypto asset already exists but is inactive (${duplicateAsset.name}). Reactivate it from Assets table.`,
+          {
+            assetId: String(duplicateAsset.id),
+            isActive: Boolean(duplicateAsset.isActive),
+          },
+        );
+      }
+    }
+
+    let insertedAssets: Array<{ id: string }> = [];
+    try {
+      insertedAssets = await withTimedDb('create_asset', async () => {
+        return db
+          .insert(assets)
+          .values({
+            name: parsed.data.name,
+            assetType: parsed.data.assetType,
+            subtype: normalizedSubtype || null,
+            symbol: normalizedSymbol || null,
+            ticker: normalizedTicker,
+            isin: normalizedIsin,
+            exchange: parsed.data.exchange?.trim().toUpperCase() || null,
+            providerSymbol: normalizedProviderSymbol || null,
+            currency: parsed.data.currency.toUpperCase(),
+            notes: normalizedNotes || null,
+          })
+          .returning({ id: assets.id });
+      });
+    } catch (error) {
+      const dbCode =
+        typeof error === 'object' && error !== null && 'code' in error
+          ? String((error as { code?: unknown }).code ?? '')
+          : '';
+      if (dbCode === '23505') {
+        throw new ApiHttpError(
+          409,
+          'ASSET_ALREADY_EXISTS',
+          'Asset already exists with the same ISIN, ticker, or symbol.',
+        );
+      }
+      throw error;
+    }
+
+    const [assetRow] = insertedAssets;
     if (!assetRow) {
       throw new ApiHttpError(500, 'INTERNAL_ERROR', 'Failed to create asset');
     }
@@ -3514,6 +4429,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
           : minPriceTimestampMs === null
             ? minTransactionTimestampMs
             : Math.min(minTransactionTimestampMs, minPriceTimestampMs);
+      const rangeFloorTimestampMs = minTransactionTimestampMs ?? minTimestampMs;
 
       const usdToEurAt = (tsMs: number): number | null => {
         if (fxRows.length === 0) return null;
@@ -3562,11 +4478,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       };
 
       const now = new Date();
-      const rangeStartAnchorMs =
-        range === 'MAX'
-          ? (minTransactionTimestampMs ?? minTimestampMs)
-          : minTimestampMs;
-      const rangeStart = clampRangeStart(range, now, rangeStartAnchorMs);
+      const rangeStart = clampRangeStart(range, now, rangeFloorTimestampMs);
       const rangeStartMs = rangeStart.getTime();
 
       const asOfMs = latestPriceTimestampMs ?? now.getTime();
@@ -3957,6 +4869,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         accounts: accountRows.map((row) => ({
           id: String(row.id),
           name: String(row.name),
+          accountType: String(row.accountType) as Account['accountType'],
         })),
         series,
         positions,

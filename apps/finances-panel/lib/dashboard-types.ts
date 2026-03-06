@@ -1,10 +1,11 @@
-import type { AssetType } from '@second-brain/types';
+import type { Account, AssetType } from '@second-brain/types';
 
 export type OverviewRange = '1W' | '1M' | 'YTD' | '1Y' | 'MAX';
 
 export type OverviewAccountTab = {
   id: string;
   name: string;
+  accountType: Account['accountType'];
 };
 
 export type OverviewSeriesRow = {

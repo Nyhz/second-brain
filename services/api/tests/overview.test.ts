@@ -361,4 +361,21 @@ describe('finances overview route', () => {
     expect(body.rangeStartIso).toBe('2026-03-01T10:00:00.000Z');
     expect(body.series[0]?.tsIso >= '2026-03-01T10:00:00.000Z').toBe(true);
   });
+
+  test('uses first transaction as 1Y range start when portfolio is younger than one year', async () => {
+    const app = buildApp();
+
+    const response = await app.handle(
+      new Request('http://local/finances/overview?range=1Y&accountId=all'),
+    );
+
+    await expectStatus(response, 200);
+    const body = (await response.json()) as {
+      rangeStartIso: string;
+      series: Array<{ tsIso: string }>;
+    };
+
+    expect(body.rangeStartIso).toBe('2026-03-01T10:00:00.000Z');
+    expect(body.series[0]?.tsIso >= '2026-03-01T10:00:00.000Z').toBe(true);
+  });
 });

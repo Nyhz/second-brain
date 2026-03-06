@@ -5,11 +5,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { apiRequest } from '../../../lib/api';
 import { loadAssetsData } from '../../../lib/data/assets-data';
+import { loadTransactionsData } from '../../../lib/data/transactions-data';
 import { getApiErrorMessage } from '../../../lib/errors';
 import { formatMoney } from '../../../lib/format';
 import {
   Button,
   Card,
+  ConfirmModal,
   DataTable,
   EmptyState,
   ErrorState,
@@ -89,6 +91,17 @@ const typeLabel = (value: string) => {
   return option?.label ?? value;
 };
 
+const formatQuantity = (value: number) => {
+  if (!Number.isFinite(value)) {
+    return '-';
+  }
+  const rounded = Number(value.toFixed(8));
+  if (Number.isInteger(rounded)) {
+    return String(rounded);
+  }
+  return rounded.toString();
+};
+
 const requiresIsin = (assetType: AssetType) =>
   assetType === 'stock' ||
   assetType === 'etf' ||
@@ -100,6 +113,9 @@ const requiresSymbol = (assetType: AssetType) =>
 
 export function AssetsFeature() {
   const [rows, setRows] = useState<AssetWithPosition[]>([]);
+  const [holdingsByAssetId, setHoldingsByAssetId] = useState<
+    Record<string, number>
+  >({});
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -108,6 +124,9 @@ export function AssetsFeature() {
   const [isCreating, setIsCreating] = useState(false);
   const [isUpdatingMetadata, setIsUpdatingMetadata] = useState(false);
   const [deactivatingId, setDeactivatingId] = useState<string | null>(null);
+  const [reactivatingId, setReactivatingId] = useState<string | null>(null);
+  const [confirmDeactivateAsset, setConfirmDeactivateAsset] =
+    useState<AssetWithPosition | null>(null);
 
   const [createForm, setCreateForm] =
     useState<CreateAssetForm>(initialCreateForm);
@@ -117,8 +136,30 @@ export function AssetsFeature() {
   const load = useCallback(async () => {
     setIsLoading(true);
     try {
-      const data = await loadAssetsData();
-      setRows(data.rows);
+      const [assetsData, transactionsData] = await Promise.all([
+        loadAssetsData(),
+        loadTransactionsData(),
+      ]);
+      const holdings = new Map<string, number>();
+      for (const row of transactionsData.rows) {
+        if (row.rowKind !== 'asset_transaction') continue;
+        if (!row.assetId) continue;
+        if (row.transactionType !== 'buy' && row.transactionType !== 'sell')
+          continue;
+        const quantity = Number(row.quantity ?? 0);
+        if (!Number.isFinite(quantity) || quantity <= 0) continue;
+        const current = holdings.get(row.assetId) ?? 0;
+        const next =
+          row.transactionType === 'sell'
+            ? current - quantity
+            : current + quantity;
+        holdings.set(row.assetId, Number(next.toFixed(8)));
+      }
+
+      setRows(assetsData.rows);
+      setHoldingsByAssetId(
+        Object.fromEntries([...holdings.entries()].map(([id, qty]) => [id, qty])),
+      );
       setErrorMessage(null);
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
@@ -183,7 +224,9 @@ export function AssetsFeature() {
           symbol: normalizedSymbol || undefined,
           providerSymbol: normalizedProviderSymbol || undefined,
           ticker: deriveTicker(normalizedSymbol, normalizedIsin),
-          isin: normalizedIsin || undefined,
+          isin: requiresIsin(createForm.assetType)
+            ? normalizedIsin || undefined
+            : undefined,
           currency: normalizedCurrency,
           quantity: 1,
         }),
@@ -252,7 +295,9 @@ export function AssetsFeature() {
           symbol: normalizedSymbol || null,
           providerSymbol: normalizedProviderSymbol || null,
           ticker: deriveTicker(normalizedSymbol, normalizedIsin),
-          isin: normalizedIsin || null,
+          isin: requiresIsin(metadataForm.assetType)
+            ? normalizedIsin || null
+            : undefined,
           currency: normalizedCurrency,
         }),
       });
@@ -265,19 +310,41 @@ export function AssetsFeature() {
     }
   };
 
-  const deactivateAsset = async (asset: AssetWithPosition) => {
-    if (!window.confirm(`Deactivate asset "${asset.name}"?`)) {
+  const deactivateAsset = (asset: AssetWithPosition) => {
+    setConfirmDeactivateAsset(asset);
+  };
+
+  const confirmDeactivate = async () => {
+    if (!confirmDeactivateAsset) {
       return;
     }
 
-    setDeactivatingId(asset.id);
+    setDeactivatingId(confirmDeactivateAsset.id);
     try {
-      await apiRequest(`/finances/assets/${asset.id}`, { method: 'DELETE' });
+      await apiRequest(`/finances/assets/${confirmDeactivateAsset.id}`, {
+        method: 'DELETE',
+      });
       await load();
+      setConfirmDeactivateAsset(null);
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
     } finally {
       setDeactivatingId(null);
+    }
+  };
+
+  const reactivateAsset = async (asset: AssetWithPosition) => {
+    setReactivatingId(asset.id);
+    try {
+      await apiRequest(`/finances/assets/${asset.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ isActive: true }),
+      });
+      await load();
+    } catch (error) {
+      setErrorMessage(getApiErrorMessage(error));
+    } finally {
+      setReactivatingId(null);
     }
   };
 
@@ -297,28 +364,26 @@ export function AssetsFeature() {
 
       {errorMessage ? <ErrorState message={errorMessage} /> : null}
 
-      <Card title="Assets Summary">
-        <div className="grid gap-3 sm:grid-cols-3">
-          <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2">
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">
-              Total Assets
-            </p>
-            <p className="text-xl font-semibold">{rows.length}</p>
-          </div>
-          <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2">
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">
-              Active
-            </p>
-            <p className="text-xl font-semibold">{activeCount}</p>
-          </div>
-          <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2">
-            <p className="text-xs uppercase tracking-wide text-muted-foreground">
-              Tracked
-            </p>
-            <p className="text-xl font-semibold">{trackedCount}</p>
-          </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">
+            Total Assets
+          </p>
+          <p className="text-xl font-semibold">{rows.length}</p>
         </div>
-      </Card>
+        <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">
+            Active
+          </p>
+          <p className="text-xl font-semibold">{activeCount}</p>
+        </div>
+        <div className="rounded-md border border-border/70 bg-muted/30 px-3 py-2">
+          <p className="text-xs uppercase tracking-wide text-muted-foreground">
+            Tracked
+          </p>
+          <p className="text-xl font-semibold">{trackedCount}</p>
+        </div>
+      </div>
 
       <Card title="Asset Registry">
         {isLoading ? (
@@ -335,7 +400,8 @@ export function AssetsFeature() {
                   <div>
                     <div className="font-medium">{row.name}</div>
                     <div className="text-xs text-muted-foreground">
-                      {row.symbol ?? row.isin ?? '-'}
+                      {row.symbol ??
+                        (row.assetType === 'crypto' ? '-' : row.isin ?? '-')}
                     </div>
                   </div>
                 ),
@@ -353,13 +419,14 @@ export function AssetsFeature() {
               {
                 key: 'isin',
                 header: 'ISIN',
-                render: (row: AssetWithPosition) => row.isin ?? '-',
+                render: (row: AssetWithPosition) =>
+                  row.assetType === 'crypto' ? '' : row.isin ?? '-',
               },
               {
                 key: 'quantity',
                 header: 'Quantity',
                 render: (row: AssetWithPosition) =>
-                  row.position ? row.position.quantity.toString() : '-',
+                  formatQuantity(holdingsByAssetId[row.id] ?? 0),
               },
               {
                 key: 'price',
@@ -399,13 +466,23 @@ export function AssetsFeature() {
                     <Button
                       type="button"
                       size="sm"
-                      variant="danger"
-                      onClick={() => void deactivateAsset(row)}
-                      disabled={deactivatingId === row.id || !row.isActive}
+                      variant={row.isActive ? 'danger' : 'secondary'}
+                      onClick={() =>
+                        row.isActive
+                          ? void deactivateAsset(row)
+                          : void reactivateAsset(row)
+                      }
+                      disabled={
+                        deactivatingId === row.id || reactivatingId === row.id
+                      }
                     >
                       {deactivatingId === row.id
                         ? 'Deactivating...'
-                        : 'Deactivate'}
+                        : reactivatingId === row.id
+                          ? 'Reactivating...'
+                          : row.isActive
+                            ? 'Deactivate'
+                            : 'Reactivate'}
                     </Button>
                   </div>
                 ),
@@ -509,26 +586,32 @@ export function AssetsFeature() {
             </div>
           </div>
 
-          <div className="grid gap-1.5 sm:grid-cols-2 sm:gap-4">
-            <div className="grid gap-1.5">
-              <label
-                className="text-sm font-medium"
-                htmlFor="create-asset-isin"
-              >
-                ISIN
-              </label>
-              <input
-                id="create-asset-isin"
-                className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-                value={createForm.isin}
-                onChange={(event) =>
-                  setCreateForm((current) => ({
-                    ...current,
-                    isin: event.target.value.toUpperCase(),
-                  }))
-                }
-              />
-            </div>
+          <div
+            className={`grid gap-1.5 ${
+              createForm.assetType === 'crypto' ? '' : 'sm:grid-cols-2 sm:gap-4'
+            }`}
+          >
+            {createForm.assetType === 'crypto' ? null : (
+              <div className="grid gap-1.5">
+                <label
+                  className="text-sm font-medium"
+                  htmlFor="create-asset-isin"
+                >
+                  ISIN
+                </label>
+                <input
+                  id="create-asset-isin"
+                  className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={createForm.isin}
+                  onChange={(event) =>
+                    setCreateForm((current) => ({
+                      ...current,
+                      isin: event.target.value.toUpperCase(),
+                    }))
+                  }
+                />
+              </div>
+            )}
             <div className="grid gap-1.5">
               <label
                 className="text-sm font-medium"
@@ -661,26 +744,34 @@ export function AssetsFeature() {
             </div>
           </div>
 
-          <div className="grid gap-1.5 sm:grid-cols-2 sm:gap-4">
-            <div className="grid gap-1.5">
-              <label
-                className="text-sm font-medium"
-                htmlFor="metadata-asset-isin"
-              >
-                ISIN
-              </label>
-              <input
-                id="metadata-asset-isin"
-                className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-                value={metadataForm.isin}
-                onChange={(event) =>
-                  setMetadataForm((current) => ({
-                    ...current,
-                    isin: event.target.value.toUpperCase(),
-                  }))
-                }
-              />
-            </div>
+          <div
+            className={`grid gap-1.5 ${
+              metadataForm.assetType === 'crypto'
+                ? ''
+                : 'sm:grid-cols-2 sm:gap-4'
+            }`}
+          >
+            {metadataForm.assetType === 'crypto' ? null : (
+              <div className="grid gap-1.5">
+                <label
+                  className="text-sm font-medium"
+                  htmlFor="metadata-asset-isin"
+                >
+                  ISIN
+                </label>
+                <input
+                  id="metadata-asset-isin"
+                  className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+                  value={metadataForm.isin}
+                  onChange={(event) =>
+                    setMetadataForm((current) => ({
+                      ...current,
+                      isin: event.target.value.toUpperCase(),
+                    }))
+                  }
+                />
+              </div>
+            )}
             <div className="grid gap-1.5">
               <label
                 className="text-sm font-medium"
@@ -714,6 +805,21 @@ export function AssetsFeature() {
           </Button>
         </form>
       </Modal>
+
+      <ConfirmModal
+        open={Boolean(confirmDeactivateAsset)}
+        title="Deactivate Asset"
+        description={
+          confirmDeactivateAsset
+            ? `Deactivate asset "${confirmDeactivateAsset.name}"?`
+            : ''
+        }
+        confirmLabel="Deactivate"
+        confirmVariant="danger"
+        isLoading={Boolean(deactivatingId)}
+        onCancel={() => setConfirmDeactivateAsset(null)}
+        onConfirm={() => void confirmDeactivate()}
+      />
     </div>
   );
 }

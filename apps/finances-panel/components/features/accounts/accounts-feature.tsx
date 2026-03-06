@@ -10,6 +10,7 @@ import { formatDate, formatMoney } from '../../../lib/format';
 import {
   Button,
   Card,
+  ConfirmModal,
   DataTable,
   EmptyState,
   ErrorState,
@@ -19,11 +20,16 @@ import {
   PriceLineChart,
 } from '../../ui';
 
-type CreatableAccountType = 'savings' | 'brokerage' | 'crypto_exchange';
+type CreatableAccountType =
+  | 'savings'
+  | 'brokerage'
+  | 'crypto_exchange'
+  | 'investment_platform';
 
 const accountTypeLabel = (accountType: string) => {
   if (accountType === 'brokerage') return 'Broker';
   if (accountType === 'crypto_exchange') return 'Exchange';
+  if (accountType === 'investment_platform') return 'Investment Fund Account';
   if (accountType === 'savings') return 'Savings';
   return accountType;
 };
@@ -38,6 +44,10 @@ export function AccountsFeature() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
+  const [confirmDeleteAccount, setConfirmDeleteAccount] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
 
   const [name, setName] = useState('');
   const [accountType, setAccountType] =
@@ -108,22 +118,23 @@ export function AccountsFeature() {
     }
   };
 
-  const deleteAccount = async (accountId: string, accountName: string) => {
-    if (
-      !window.confirm(
-        `Delete account "${accountName}"? This will also delete its transactions.`,
-      )
-    ) {
+  const deleteAccount = (accountId: string, accountName: string) => {
+    setConfirmDeleteAccount({ id: accountId, name: accountName });
+  };
+
+  const confirmDelete = async () => {
+    if (!confirmDeleteAccount) {
       return;
     }
 
-    setDeletingAccountId(accountId);
+    setDeletingAccountId(confirmDeleteAccount.id);
     try {
-      await apiRequest(`/finances/accounts/${accountId}`, {
+      await apiRequest(`/finances/accounts/${confirmDeleteAccount.id}`, {
         method: 'DELETE',
       });
       await load();
       setErrorMessage(null);
+      setConfirmDeleteAccount(null);
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
     } finally {
@@ -281,6 +292,7 @@ export function AccountsFeature() {
               <option value="savings">Savings</option>
               <option value="brokerage">Broker</option>
               <option value="crypto_exchange">Exchange</option>
+              <option value="investment_platform">Investment Fund Account</option>
             </select>
           </div>
 
@@ -307,6 +319,21 @@ export function AccountsFeature() {
           </Button>
         </form>
       </Modal>
+
+      <ConfirmModal
+        open={Boolean(confirmDeleteAccount)}
+        title="Delete Account"
+        description={
+          confirmDeleteAccount
+            ? `Delete account "${confirmDeleteAccount.name}"? This will also delete its transactions.`
+            : ''
+        }
+        confirmLabel="Delete Account"
+        confirmVariant="danger"
+        isLoading={Boolean(deletingAccountId)}
+        onCancel={() => setConfirmDeleteAccount(null)}
+        onConfirm={() => void confirmDelete()}
+      />
     </div>
   );
 }
