@@ -10,6 +10,7 @@ import type {
   DegiroImportResult,
   UnifiedTransactionRow,
 } from '@second-brain/types';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 import { apiRequest } from '../../../lib/api';
@@ -22,17 +23,13 @@ import {
   type TransactionFormInput,
   validateTransactionForm,
 } from '../../../lib/transactions';
-import {
-  Button,
-  Card,
-  ConfirmModal,
-  DataTable,
-  EmptyState,
-  ErrorState,
-  KpiCard,
-  LoadingSkeleton,
-  Modal,
-} from '../../ui';
+import { Button } from '../../ui/button';
+import { Card } from '../../ui/card';
+import { ConfirmModal } from '../../ui/confirm-modal';
+import { DataTable } from '../../ui/data-table';
+import { KpiCard } from '../../ui/kpi-card';
+import { Modal } from '../../ui/modal';
+import { EmptyState, ErrorState, LoadingSkeleton } from '../../ui/states';
 
 const initialForm = (accountId = ''): TransactionFormInput => ({
   accountId,
@@ -120,11 +117,28 @@ const getRowTypeLabel = (row: UnifiedTransactionRow) => {
   return toLabel(row.movementType ?? 'Cash Movement');
 };
 
-export function TransactionsFeature() {
-  const [accounts, setAccounts] = useState<Account[]>([]);
-  const [assets, setAssets] = useState<AssetWithPosition[]>([]);
-  const [rows, setRows] = useState<UnifiedTransactionRow[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+type TransactionsFeatureProps = {
+  initialAccounts?: Account[];
+  initialAssets?: AssetWithPosition[];
+  initialRows?: UnifiedTransactionRow[];
+};
+
+export function TransactionsFeature({
+  initialAccounts,
+  initialAssets,
+  initialRows,
+}: TransactionsFeatureProps) {
+  const router = useRouter();
+  const [accounts, setAccounts] = useState<Account[]>(initialAccounts ?? []);
+  const [assets, setAssets] = useState<AssetWithPosition[]>(
+    initialAssets ?? [],
+  );
+  const [rows, setRows] = useState<UnifiedTransactionRow[]>(initialRows ?? []);
+  const [isLoading, setIsLoading] = useState(
+    initialAccounts === undefined ||
+      initialAssets === undefined ||
+      initialRows === undefined,
+  );
   const [isSaving, setIsSaving] = useState(false);
   const [deletingTransactionId, setDeletingTransactionId] = useState<
     string | null
@@ -214,8 +228,15 @@ export function TransactionsFeature() {
   );
 
   useEffect(() => {
+    if (
+      initialAccounts !== undefined &&
+      initialAssets !== undefined &&
+      initialRows !== undefined
+    ) {
+      return;
+    }
     void load();
-  }, [load]);
+  }, [initialAccounts, initialAssets, initialRows, load]);
 
   useEffect(() => {
     const defaultCreateAccountId = createAccounts[0]?.id ?? '';
@@ -343,6 +364,7 @@ export function TransactionsFeature() {
 
       setIsCreateModalOpen(false);
       await load();
+      router.refresh();
       setErrorMessage(null);
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
@@ -372,6 +394,7 @@ export function TransactionsFeature() {
         },
       );
       await load();
+      router.refresh();
       setErrorMessage(null);
       setConfirmDeleteTransaction(null);
     } catch (error) {
@@ -431,6 +454,7 @@ export function TransactionsFeature() {
       setImportResult(result);
       setErrorMessage(null);
       await load();
+      router.refresh();
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
     } finally {

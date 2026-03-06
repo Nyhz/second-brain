@@ -25,13 +25,14 @@ const orderedAccounts = (accounts: Account[]) =>
     });
     if (nameCompare !== 0) return nameCompare;
 
-    const createdCompare = normalizeDate(left.createdAt) - normalizeDate(right.createdAt);
+    const createdCompare =
+      normalizeDate(left.createdAt) - normalizeDate(right.createdAt);
     if (createdCompare !== 0) return createdCompare;
 
     return left.id.localeCompare(right.id);
   });
 
-const buildAccountSlugMap = (accounts: Account[]) => {
+export const buildAccountSlugMaps = (accounts: Account[]) => {
   const slugsById = new Map<string, string>();
   const idsBySlug = new Map<string, string>();
   const usedSlugs = new Set<string>();
@@ -58,7 +59,7 @@ const buildAccountSlugMap = (accounts: Account[]) => {
 };
 
 export const getAccountSlugById = (accountId: string, accounts: Account[]) => {
-  const { slugsById } = buildAccountSlugMap(accounts);
+  const { slugsById } = buildAccountSlugMaps(accounts);
   return slugsById.get(accountId) ?? null;
 };
 
@@ -71,12 +72,14 @@ export const resolveAccountIdFromPathSegment = (
     return null;
   }
 
-  const directMatch = accounts.find((account) => account.id === normalizedSegment);
+  const directMatch = accounts.find(
+    (account) => account.id === normalizedSegment,
+  );
   if (directMatch) {
     return directMatch.id;
   }
 
-  const { idsBySlug } = buildAccountSlugMap(accounts);
+  const { idsBySlug } = buildAccountSlugMaps(accounts);
   const lowerSegment = normalizedSegment.toLowerCase();
   const bySlug = idsBySlug.get(lowerSegment);
   if (bySlug) {

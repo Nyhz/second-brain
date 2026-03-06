@@ -9,15 +9,13 @@ import type {
 import { loadOverview } from '../lib/data/overview-data';
 import { formatDateTime, formatMoney } from '../lib/format';
 import { cn } from '../lib/utils';
-import {
-  AreaPerformanceChart,
-  Button,
-  Card,
-  DataTable,
-  EmptyState,
-  KpiCard,
-  Sparkline,
-} from './ui';
+import { Button } from './ui/button';
+import { Card } from './ui/card';
+import { AreaPerformanceChart } from './ui/charts/area-performance-chart';
+import { Sparkline } from './ui/charts/sparkline';
+import { DataTable } from './ui/data-table';
+import { KpiCard } from './ui/kpi-card';
+import { EmptyState } from './ui/states';
 
 const RANGES: OverviewRange[] = ['1W', '1M', 'YTD', '1Y', 'MAX'];
 
@@ -257,8 +255,7 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
                 {
                   key: 'avg-total',
                   header: 'Avg Buy / Total',
-                  sortValue: (row: OverviewPositionRow) =>
-                    row.avgBuyTotalEur,
+                  sortValue: (row: OverviewPositionRow) => row.avgBuyTotalEur,
                   render: (row: OverviewPositionRow) =>
                     row.avgBuyTotalEur === null ? (
                       '-'
@@ -281,7 +278,8 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
                 {
                   key: 'pnl',
                   header: 'Unrealized P/L',
-                  sortValue: (row: OverviewPositionRow) => row.periodPnlValueEur,
+                  sortValue: (row: OverviewPositionRow) =>
+                    row.periodPnlValueEur,
                   render: (row: OverviewPositionRow) => (
                     <span
                       className={

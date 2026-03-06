@@ -29,7 +29,9 @@ export function SideNav({ items = [], groups }: SideNavProps) {
     () =>
       groupedItems
         .flatMap((group) => group.items)
-        .filter((item) => Array.isArray(item.children) && item.children.length > 0),
+        .filter(
+          (item) => Array.isArray(item.children) && item.children.length > 0,
+        ),
     [groupedItems],
   );
 
@@ -39,7 +41,9 @@ export function SideNav({ items = [], groups }: SideNavProps) {
       let changed = false;
 
       for (const item of parentItems) {
-        const hasActiveChild = Boolean(item.children?.some((child) => child.active));
+        const hasActiveChild = Boolean(
+          item.children?.some((child) => child.active),
+        );
         if (next[item.href] === undefined) {
           next[item.href] = Boolean(item.active || hasActiveChild);
           changed = true;
@@ -125,6 +129,7 @@ export function SideNav({ items = [], groups }: SideNavProps) {
                           <Link
                             key={child.href}
                             href={child.href}
+                            prefetch={false}
                             className={cn(
                               'rounded-md px-3 py-1.5 text-xs transition-colors',
                               child.active

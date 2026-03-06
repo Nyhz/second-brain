@@ -1,23 +1,19 @@
 'use client';
 
 import type { AssetType, AssetWithPosition } from '@second-brain/types';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { apiRequest } from '../../../lib/api';
 import { loadAssetsData } from '../../../lib/data/assets-data';
-import { loadTransactionsData } from '../../../lib/data/transactions-data';
 import { getApiErrorMessage } from '../../../lib/errors';
 import { formatMoney } from '../../../lib/format';
-import {
-  Button,
-  Card,
-  ConfirmModal,
-  DataTable,
-  EmptyState,
-  ErrorState,
-  LoadingSkeleton,
-  Modal,
-} from '../../ui';
+import { Button } from '../../ui/button';
+import { Card } from '../../ui/card';
+import { ConfirmModal } from '../../ui/confirm-modal';
+import { DataTable } from '../../ui/data-table';
+import { Modal } from '../../ui/modal';
+import { EmptyState, ErrorState, LoadingSkeleton } from '../../ui/states';
 
 const v1AssetTypeOptions: Array<{ value: AssetType; label: string }> = [
   { value: 'stock', label: 'Stock' },
@@ -111,12 +107,21 @@ const requiresIsin = (assetType: AssetType) =>
 const requiresSymbol = (assetType: AssetType) =>
   assetType === 'stock' || assetType === 'etf' || assetType === 'crypto';
 
-export function AssetsFeature() {
-  const [rows, setRows] = useState<AssetWithPosition[]>([]);
+type AssetsFeatureProps = {
+  initialRows?: AssetWithPosition[];
+  initialHoldingsByAssetId?: Record<string, number>;
+};
+
+export function AssetsFeature({
+  initialRows,
+  initialHoldingsByAssetId,
+}: AssetsFeatureProps) {
+  const router = useRouter();
+  const [rows, setRows] = useState<AssetWithPosition[]>(initialRows ?? []);
   const [holdingsByAssetId, setHoldingsByAssetId] = useState<
     Record<string, number>
-  >({});
-  const [isLoading, setIsLoading] = useState(true);
+  >(initialHoldingsByAssetId ?? {});
+  const [isLoading, setIsLoading] = useState(initialRows === undefined);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
@@ -136,32 +141,9 @@ export function AssetsFeature() {
   const load = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [assetsData, transactionsData] = await Promise.all([
-        loadAssetsData(),
-        loadTransactionsData(),
-      ]);
-      const holdings = new Map<string, number>();
-      for (const row of transactionsData.rows) {
-        if (row.rowKind !== 'asset_transaction') continue;
-        if (!row.assetId) continue;
-        if (row.transactionType !== 'buy' && row.transactionType !== 'sell')
-          continue;
-        const quantity = Number(row.quantity ?? 0);
-        if (!Number.isFinite(quantity) || quantity <= 0) continue;
-        const current = holdings.get(row.assetId) ?? 0;
-        const next =
-          row.transactionType === 'sell'
-            ? current - quantity
-            : current + quantity;
-        holdings.set(row.assetId, Number(next.toFixed(8)));
-      }
-
+      const assetsData = await loadAssetsData({ withHoldings: true });
       setRows(assetsData.rows);
-      setHoldingsByAssetId(
-        Object.fromEntries(
-          [...holdings.entries()].map(([id, qty]) => [id, qty]),
-        ),
-      );
+      setHoldingsByAssetId(assetsData.holdingsByAssetId);
       setErrorMessage(null);
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
@@ -171,8 +153,11 @@ export function AssetsFeature() {
   }, []);
 
   useEffect(() => {
+    if (initialRows !== undefined) {
+      return;
+    }
     void load();
-  }, [load]);
+  }, [initialRows, load]);
 
   const activeCount = useMemo(
     () => rows.filter((row) => row.isActive).length,
@@ -236,6 +221,7 @@ export function AssetsFeature() {
       setCreateForm(initialCreateForm);
       setIsCreateModalOpen(false);
       await load();
+      router.refresh();
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
     } finally {
@@ -305,6 +291,7 @@ export function AssetsFeature() {
       });
       setIsMetadataModalOpen(false);
       await load();
+      router.refresh();
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
     } finally {
@@ -327,6 +314,7 @@ export function AssetsFeature() {
         method: 'DELETE',
       });
       await load();
+      router.refresh();
       setConfirmDeactivateAsset(null);
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
@@ -343,6 +331,7 @@ export function AssetsFeature() {
         body: JSON.stringify({ isActive: true }),
       });
       await load();
+      router.refresh();
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
     } finally {
@@ -432,7 +421,8 @@ export function AssetsFeature() {
               {
                 key: 'quantity',
                 header: 'Quantity',
-                sortValue: (row: AssetWithPosition) => holdingsByAssetId[row.id] ?? 0,
+                sortValue: (row: AssetWithPosition) =>
+                  holdingsByAssetId[row.id] ?? 0,
                 render: (row: AssetWithPosition) =>
                   formatQuantity(holdingsByAssetId[row.id] ?? 0),
               },

@@ -1,21 +1,21 @@
 'use client';
 
-import type { OverviewPositionRow, OverviewRange, OverviewState } from '../../../lib/dashboard-types';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import type {
+  OverviewPositionRow,
+  OverviewRange,
+  OverviewState,
+} from '../../../lib/dashboard-types';
 import { loadOverview } from '../../../lib/data/overview-data';
 import { getApiErrorMessage } from '../../../lib/errors';
 import { formatDateTime, formatMoney } from '../../../lib/format';
 import { cn } from '../../../lib/utils';
-import {
-  AreaPerformanceChart,
-  Button,
-  Card,
-  DataTable,
-  EmptyState,
-  ErrorState,
-  KpiCard,
-  LoadingSkeleton,
-} from '../../ui';
+import { Button } from '../../ui/button';
+import { Card } from '../../ui/card';
+import { AreaPerformanceChart } from '../../ui/charts/area-performance-chart';
+import { DataTable } from '../../ui/data-table';
+import { KpiCard } from '../../ui/kpi-card';
+import { EmptyState, ErrorState, LoadingSkeleton } from '../../ui/states';
 
 const RANGES: OverviewRange[] = ['1W', '1M', 'YTD', '1Y', 'MAX'];
 
@@ -55,11 +55,21 @@ const accountTypeLabel = (accountType: string) => {
   return toLabel(accountType);
 };
 
-export function AccountProfileFeature({ accountId }: { accountId: string }) {
-  const [data, setData] = useState<OverviewState | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+type AccountProfileFeatureProps = {
+  accountId: string;
+  initialData?: OverviewState;
+};
+
+export function AccountProfileFeature({
+  accountId,
+  initialData,
+}: AccountProfileFeatureProps) {
+  const [data, setData] = useState<OverviewState | null>(initialData ?? null);
+  const [isLoading, setIsLoading] = useState(initialData === undefined);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [activeRange, setActiveRange] = useState<OverviewRange>('1M');
+  const [activeRange, setActiveRange] = useState<OverviewRange>(
+    initialData?.range ?? '1M',
+  );
 
   const load = useCallback(
     async (range: OverviewRange) => {
@@ -79,8 +89,11 @@ export function AccountProfileFeature({ accountId }: { accountId: string }) {
   );
 
   useEffect(() => {
+    if (initialData !== undefined) {
+      return;
+    }
     void load('1M');
-  }, [load]);
+  }, [initialData, load]);
 
   const selectedAccount = useMemo(() => {
     if (!data) return null;
@@ -110,7 +123,9 @@ export function AccountProfileFeature({ accountId }: { accountId: string }) {
       label: `${row.symbol} · ${row.name}`,
       value: row.currentTotalEur,
       weightPct:
-        total <= 0 ? 0 : Number(((row.currentTotalEur / total) * 100).toFixed(2)),
+        total <= 0
+          ? 0
+          : Number(((row.currentTotalEur / total) * 100).toFixed(2)),
     }));
   }, [data]);
 
@@ -127,7 +142,11 @@ export function AccountProfileFeature({ accountId }: { accountId: string }) {
     return (
       <div className="space-y-3">
         <ErrorState message={errorMessage} />
-        <Button type="button" variant="secondary" onClick={() => void load(activeRange)}>
+        <Button
+          type="button"
+          variant="secondary"
+          onClick={() => void load(activeRange)}
+        >
           Retry
         </Button>
       </div>
@@ -142,7 +161,9 @@ export function AccountProfileFeature({ accountId }: { accountId: string }) {
     <div className="space-y-6">
       <header className="flex flex-col gap-3 xl:flex-row xl:items-end xl:justify-between">
         <div className="space-y-1">
-          <h1 className="text-2xl font-semibold tracking-tight">{selectedAccount.name}</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            {selectedAccount.name}
+          </h1>
           <p className="small">
             {accountTypeLabel(selectedAccount.accountType)} · As of{' '}
             {formatDateTime(data.asOfIso)}
@@ -179,7 +200,9 @@ export function AccountProfileFeature({ accountId }: { accountId: string }) {
         <KpiCard
           label="Total Value"
           value={
-            <span className="sb-sensitive-value">{formatMoney(data.totalValue)}</span>
+            <span className="sb-sensitive-value">
+              {formatMoney(data.totalValue)}
+            </span>
           }
         />
         <KpiCard
@@ -192,7 +215,10 @@ export function AccountProfileFeature({ accountId }: { accountId: string }) {
           }
         />
         <KpiCard label="Open Positions" value={String(data.positions.length)} />
-        <KpiCard label="Account Type" value={accountTypeLabel(selectedAccount.accountType)} />
+        <KpiCard
+          label="Account Type"
+          value={accountTypeLabel(selectedAccount.accountType)}
+        />
       </section>
 
       <Card title="Performance">
@@ -214,7 +240,9 @@ export function AccountProfileFeature({ accountId }: { accountId: string }) {
               {allocationByAsset.map((item) => (
                 <div key={item.label} className="space-y-1.5">
                   <div className="flex items-center justify-between gap-3 text-sm">
-                    <span className="truncate text-foreground">{item.label}</span>
+                    <span className="truncate text-foreground">
+                      {item.label}
+                    </span>
                     <span className="shrink-0 text-muted-foreground">
                       {item.weightPct.toFixed(2)}%
                     </span>
@@ -222,7 +250,9 @@ export function AccountProfileFeature({ accountId }: { accountId: string }) {
                   <div className="h-2 overflow-hidden rounded-full bg-muted/50">
                     <div
                       className="h-full rounded-full bg-foreground/85"
-                      style={{ width: `${Math.min(100, Math.max(item.weightPct, 1.5))}%` }}
+                      style={{
+                        width: `${Math.min(100, Math.max(item.weightPct, 1.5))}%`,
+                      }}
                     />
                   </div>
                   <div className="text-xs text-muted-foreground sb-sensitive-value">
@@ -247,8 +277,12 @@ export function AccountProfileFeature({ accountId }: { accountId: string }) {
                 sortValue: (row: OverviewPositionRow) => row.name,
                 render: (row: OverviewPositionRow) => (
                   <div className="leading-tight">
-                    <div className="font-semibold text-foreground">{row.name}</div>
-                    <div className="text-xs text-muted-foreground">{row.symbol}</div>
+                    <div className="font-semibold text-foreground">
+                      {row.name}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {row.symbol}
+                    </div>
                   </div>
                 ),
               },
@@ -262,7 +296,8 @@ export function AccountProfileFeature({ accountId }: { accountId: string }) {
                 key: 'qty',
                 header: 'Quantity',
                 sortValue: (row: OverviewPositionRow) => row.quantity,
-                render: (row: OverviewPositionRow) => formatOverviewQuantity(row),
+                render: (row: OverviewPositionRow) =>
+                  formatOverviewQuantity(row),
               },
               {
                 key: 'avg-total',

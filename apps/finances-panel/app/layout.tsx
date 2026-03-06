@@ -6,6 +6,7 @@ import type { ReactNode } from 'react';
 import { LayoutShell } from '../components/layout-shell';
 import { SensitiveModeProvider } from '../components/sensitive-mode-provider';
 import { ThemeProvider } from '../components/theme-provider';
+import { loadAccountsData } from '../lib/data/accounts-data';
 
 const themeBootScript = `(() => {
   try {
@@ -45,6 +46,9 @@ export default async function RootLayout({
   const cookieStore = await cookies();
   const themeCookie = cookieStore.get('sb-theme-mode')?.value;
   const initialTheme = themeCookie === 'light' ? 'light' : 'dark';
+  const accountsData = await loadAccountsData().catch(() => ({
+    rows: [],
+  }));
 
   return (
     <html
@@ -59,7 +63,9 @@ export default async function RootLayout({
         </Script>
         <ThemeProvider>
           <SensitiveModeProvider>
-            <LayoutShell>{children}</LayoutShell>
+            <LayoutShell initialAccounts={accountsData.rows}>
+              {children}
+            </LayoutShell>
           </SensitiveModeProvider>
         </ThemeProvider>
       </body>

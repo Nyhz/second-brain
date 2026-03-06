@@ -10,7 +10,3 @@ export * from './side-nav';
 export * from './states';
 export * from './theme-selector';
 export * from './top-nav';
-export * from './charts/allocation-donut-chart';
-export * from './charts/area-performance-chart';
-export * from './charts/price-line-chart';
-export * from './charts/sparkline';

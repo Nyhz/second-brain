@@ -1,6 +1,6 @@
 import {
-  accounts,
   accountCashMovements,
+  accounts,
   and,
   assetPositions,
   assetTransactions,
@@ -20,22 +20,22 @@ import {
   type AssetType,
   type BinanceImportResult,
   type CobasImportResult,
+  type CreateAccountCashMovementInput,
+  type CreateAssetTransactionInput,
   type DegiroAccountStatementAnalyzeResult,
   type DegiroAccountStatementImportResult,
-  type CreateAssetTransactionInput,
-  type CreateAccountCashMovementInput,
   type DegiroImportResult,
   type FinancesOverviewResponse,
-  type UnifiedTransactionRow,
   type OverviewRange,
+  type UnifiedTransactionRow,
   binanceImportRequestSchema,
   cobasImportRequestSchema,
+  createAccountCashMovementInputSchema,
+  createAccountInputSchema,
   createAssetInputSchema,
   createAssetTransactionInputSchema,
   degiroAccountStatementAnalyzeRequestSchema,
   degiroAccountStatementImportRequestSchema,
-  createAccountInputSchema,
-  createAccountCashMovementInputSchema,
   degiroImportRequestSchema,
   overviewRangeSchema,
   updateAssetInputSchema,
@@ -46,7 +46,6 @@ import { withTimedDb } from '../../lib/db-timed';
 import { ApiHttpError } from '../../lib/errors';
 import { parseBinanceTransactionsCsv } from './binance-import';
 import { parseCobasTransactionsCsv } from './cobas-import';
-import { parseDegiroTransactionsCsv } from './degiro-import';
 import {
   type DegiroAccountStatementRow,
   type DegiroAccountStatementRowType,
@@ -54,6 +53,7 @@ import {
   getDegiroStatementTicker,
   parseDegiroAccountStatementCsv,
 } from './degiro-account-statement';
+import { parseDegiroTransactionsCsv } from './degiro-import';
 
 const normalizeCurrency = (value: string) => value.trim().toUpperCase();
 
@@ -508,6 +508,33 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     });
   };
 
+  const listAssetHoldings = async () => {
+    const rows = await withTimedDb('list_asset_holdings', async () => {
+      return db.execute(sql`
+        select
+          asset_id as "assetId",
+          coalesce(
+            sum(
+              case
+                when transaction_type = 'buy' then quantity
+                when transaction_type = 'sell' then -quantity
+                else 0
+              end
+            ),
+            0
+          )::numeric as quantity
+        from finances.asset_transactions
+        group by asset_id
+      `);
+    });
+
+    return Object.fromEntries(
+      rows
+        .map((row) => [String(row.assetId), Number(row.quantity ?? 0)] as const)
+        .filter(([, quantity]) => Number.isFinite(quantity)),
+    );
+  };
+
   const listAccountsWithCash = async () => {
     const rows = await withTimedDb('list_accounts_with_cash', async () => {
       return db.execute(sql`
@@ -777,7 +804,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     return true;
   };
 
-  const statementCashMovementType = (rowType: DegiroAccountStatementRowType) => {
+  const statementCashMovementType = (
+    rowType: DegiroAccountStatementRowType,
+  ) => {
     if (rowType === 'deposit') return 'deposit';
     if (rowType === 'connectivity_fee') return 'connectivity_fee';
     if (rowType === 'interest') return 'interest';
@@ -820,7 +849,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         return cache.get(cacheKey) ?? null;
       }
 
-      const orderRows = row.orderId ? byOrder.get(row.orderId) ?? [] : [];
+      const orderRows = row.orderId ? (byOrder.get(row.orderId) ?? []) : [];
       const eurRow = orderRows.find(
         (candidate) =>
           normalizeCurrency(candidate.changeCurrency ?? '') === 'EUR' &&
@@ -915,10 +944,15 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
 
   const loadAssetsByIsin = async (isins: string[]) => {
     if (isins.length === 0) {
-      return new Map<string, { id: string; assetType: AssetType; name: string }>();
+      return new Map<
+        string,
+        { id: string; assetType: AssetType; name: string }
+      >();
     }
-    const rows = await withTimedDb('degiro_statement_assets_by_isin', async () =>
-      db.execute(sql`
+    const rows = await withTimedDb(
+      'degiro_statement_assets_by_isin',
+      async () =>
+        db.execute(sql`
         select id, isin, asset_type as "assetType", name
         from finances.assets
         where isin in (${sql.join(
@@ -976,29 +1010,31 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     rawPayload?: Record<string, unknown>;
     affectsCashBalance: boolean;
   }) => {
-    const [created] = await withTimedDb('create_account_cash_movement', async () =>
-      db
-        .insert(accountCashMovements)
-        .values({
-          accountId: input.accountId,
-          movementType: input.movementType,
-          occurredAt: new Date(input.occurredAt),
-          valueDate: input.valueDate ?? null,
-          nativeAmount: input.nativeAmount.toString(),
-          currency: normalizeCurrency(input.currency),
-          fxRateToEur:
-            input.fxRateToEur === null || input.fxRateToEur === undefined
-              ? null
-              : input.fxRateToEur.toString(),
-          cashImpactEur: round2(input.cashImpactEur).toString(),
-          externalReference: input.externalReference ?? null,
-          rowFingerprint: input.rowFingerprint ?? null,
-          source: input.source ?? 'manual',
-          description: input.description ?? null,
-          rawPayload: input.rawPayload ?? null,
-          affectsCashBalance: input.affectsCashBalance,
-        })
-        .returning({ id: accountCashMovements.id }),
+    const [created] = await withTimedDb(
+      'create_account_cash_movement',
+      async () =>
+        db
+          .insert(accountCashMovements)
+          .values({
+            accountId: input.accountId,
+            movementType: input.movementType,
+            occurredAt: new Date(input.occurredAt),
+            valueDate: input.valueDate ?? null,
+            nativeAmount: input.nativeAmount.toString(),
+            currency: normalizeCurrency(input.currency),
+            fxRateToEur:
+              input.fxRateToEur === null || input.fxRateToEur === undefined
+                ? null
+                : input.fxRateToEur.toString(),
+            cashImpactEur: round2(input.cashImpactEur).toString(),
+            externalReference: input.externalReference ?? null,
+            rowFingerprint: input.rowFingerprint ?? null,
+            source: input.source ?? 'manual',
+            description: input.description ?? null,
+            rawPayload: input.rawPayload ?? null,
+            affectsCashBalance: input.affectsCashBalance,
+          })
+          .returning({ id: accountCashMovements.id }),
     );
 
     if (!created?.id) {
@@ -1113,10 +1149,53 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
 
   app.get('/finances/transactions', async ({ query }) => {
     const accountId = query.accountId as string | undefined;
-    const whereSql =
-      accountId && UUID_RE.test(accountId)
-        ? sql`where account_id = ${accountId}`
-        : sql``;
+    const hasAccountFilter = accountId !== undefined && UUID_RE.test(accountId);
+    const limitRaw = query.limit as string | undefined;
+    const cursorRaw = query.cursor as string | undefined;
+
+    let limit: number | null = null;
+    if (limitRaw !== undefined) {
+      const parsedLimit = Number.parseInt(limitRaw, 10);
+      if (
+        !Number.isInteger(parsedLimit) ||
+        parsedLimit <= 0 ||
+        parsedLimit > 500
+      ) {
+        throw new ApiHttpError(
+          400,
+          'VALIDATION_ERROR',
+          'limit must be an integer between 1 and 500',
+        );
+      }
+      limit = parsedLimit;
+    }
+
+    let cursorIso: string | null = null;
+    if (cursorRaw !== undefined) {
+      const parsedCursor = new Date(cursorRaw);
+      if (Number.isNaN(parsedCursor.valueOf())) {
+        throw new ApiHttpError(
+          400,
+          'VALIDATION_ERROR',
+          'cursor must be a valid ISO datetime',
+        );
+      }
+      cursorIso = parsedCursor.toISOString();
+    }
+
+    const accountFilterAsset = hasAccountFilter
+      ? sql`and at.account_id = ${accountId}`
+      : sql``;
+    const accountFilterCash = hasAccountFilter
+      ? sql`and acm.account_id = ${accountId}`
+      : sql``;
+    const cursorFilterAsset = cursorIso
+      ? sql`and at.traded_at < ${cursorIso}`
+      : sql``;
+    const cursorFilterCash = cursorIso
+      ? sql`and acm.occurred_at < ${cursorIso}`
+      : sql``;
+    const limitSql = limit !== null ? sql`limit ${limit}` : sql``;
 
     const rows = await withTimedDb('list_unified_transactions', async () => {
       return db.execute(sql`
@@ -1150,7 +1229,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
             at.source
           from finances.asset_transactions at
           inner join finances.assets a on a.id = at.asset_id
-          ${whereSql}
+          where 1 = 1
+            ${accountFilterAsset}
+            ${cursorFilterAsset}
         ),
         cash_rows as (
           select
@@ -1175,7 +1256,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
             acm.external_reference as "externalReference",
             acm.source
           from finances.account_cash_movements acm
-          ${whereSql}
+          where 1 = 1
+            ${accountFilterCash}
+            ${cursorFilterCash}
         )
         select *
         from asset_rows
@@ -1183,6 +1266,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         select *
         from cash_rows
         order by "occurredAt" desc, id desc
+        ${limitSql}
       `);
     });
 
@@ -1199,7 +1283,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         transactionType:
           row.transactionType === null || row.transactionType === undefined
             ? null
-            : (String(row.transactionType) as UnifiedTransactionRow['transactionType']),
+            : (String(
+                row.transactionType,
+              ) as UnifiedTransactionRow['transactionType']),
         movementType:
           row.movementType === null || row.movementType === undefined
             ? null
@@ -1237,7 +1323,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
             ? null
             : String(row.linkedTransactionId),
         notes:
-          row.notes === null || row.notes === undefined ? null : String(row.notes),
+          row.notes === null || row.notes === undefined
+            ? null
+            : String(row.notes),
         externalReference:
           row.externalReference === null || row.externalReference === undefined
             ? null
@@ -1791,8 +1879,13 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     const readyRows = parsedCsv.rows.filter(
       (row) => row.status === 'ready' && row.normalized !== null,
     );
-    const symbols = [...new Set(readyRows.map((row) => row.normalized!.assetSymbol))];
-    const symbolLookup = new Map<string, { id: string; assetType: AssetType }>();
+    const symbols = [
+      ...new Set(readyRows.map((row) => row.normalized!.assetSymbol)),
+    ];
+    const symbolLookup = new Map<
+      string,
+      { id: string; assetType: AssetType }
+    >();
 
     if (symbols.length > 0) {
       const assetRows = await withTimedDb(
@@ -1836,20 +1929,25 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       }
     }
 
-    const missingSymbols = symbols.filter((symbol) => !symbolLookup.has(symbol));
+    const missingSymbols = symbols.filter(
+      (symbol) => !symbolLookup.has(symbol),
+    );
     if (missingSymbols.length > 0) {
-      await withTimedDb('binance_import_mark_failed_unknown_symbols', async () => {
-        return db
-          .update(transactionImports)
-          .set({
-            totalRows: parsedCsv.rows.length,
-            importedRows: 0,
-            skippedRows: 0,
-            failedRows: parsedCsv.rows.length,
-            updatedAt: new Date(),
-          })
-          .where(eq(transactionImports.id, importRun.id));
-      });
+      await withTimedDb(
+        'binance_import_mark_failed_unknown_symbols',
+        async () => {
+          return db
+            .update(transactionImports)
+            .set({
+              totalRows: parsedCsv.rows.length,
+              importedRows: 0,
+              skippedRows: 0,
+              failedRows: parsedCsv.rows.length,
+              updatedAt: new Date(),
+            })
+            .where(eq(transactionImports.id, importRun.id));
+        },
+      );
       throw new ApiHttpError(
         400,
         'UNKNOWN_ASSET_SYMBOL',
@@ -2110,18 +2208,21 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     }
 
     const fileHash = await sha256Hex(parsed.data.csvText);
-    const [importRun] = await withTimedDb('cobas_create_import_run', async () => {
-      return db
-        .insert(transactionImports)
-        .values({
-          source: COBAS_TRANSACTIONS_SOURCE,
-          accountId: parsed.data.accountId,
-          filename: parsed.data.fileName,
-          fileHash,
-          dryRun: parsed.data.dryRun,
-        })
-        .returning();
-    });
+    const [importRun] = await withTimedDb(
+      'cobas_create_import_run',
+      async () => {
+        return db
+          .insert(transactionImports)
+          .values({
+            source: COBAS_TRANSACTIONS_SOURCE,
+            accountId: parsed.data.accountId,
+            filename: parsed.data.fileName,
+            fileHash,
+            dryRun: parsed.data.dryRun,
+          })
+          .returning();
+      },
+    );
 
     if (!importRun) {
       throw new ApiHttpError(
@@ -2150,7 +2251,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       throw new ApiHttpError(
         400,
         'UNSUPPORTED_COBAS_CSV',
-        error instanceof Error ? error.message : 'Unsupported COBAS CSV format.',
+        error instanceof Error
+          ? error.message
+          : 'Unsupported COBAS CSV format.',
       );
     }
 
@@ -2161,7 +2264,10 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       ...new Set(readyRows.map((row) => row.normalized!.symbolHint)),
     ];
 
-    const symbolMatches = new Map<string, { id: string; assetType: AssetType }[]>();
+    const symbolMatches = new Map<
+      string,
+      { id: string; assetType: AssetType }[]
+    >();
     if (symbolHints.length > 0) {
       const assetRows = await withTimedDb(
         'cobas_import_asset_lookup_symbols',
@@ -2415,8 +2521,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
             assetId: result.assetId ?? null,
             transactionId: result.transactionId ?? null,
             rawPayload:
-              parsedCsv.rows.find((entry) => entry.rowNumber === result.rowNumber)
-                ?.raw ?? {},
+              parsedCsv.rows.find(
+                (entry) => entry.rowNumber === result.rowNumber,
+              )?.raw ?? {},
           })),
         );
       });
@@ -2488,7 +2595,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       }
 
       const fileHash = await sha256Hex(parsed.data.csvText);
-      const parsedCsv = await parseDegiroAccountStatementCsv(parsed.data.csvText);
+      const parsedCsv = await parseDegiroAccountStatementCsv(
+        parsed.data.csvText,
+      );
       const resolveOrderFxRate = buildOrderFxRateResolver(parsedCsv.rows);
 
       const statementIsins = [
@@ -2513,7 +2622,8 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       >();
 
       const categoryBreakdown = new Map<string, number>();
-      const previewRows: DegiroAccountStatementAnalyzeResult['previewRows'] = [];
+      const previewRows: DegiroAccountStatementAnalyzeResult['previewRows'] =
+        [];
       let readyRows = 0;
       let unresolvedRows = 0;
       let failedRows = 0;
@@ -2687,7 +2797,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       }
 
       const fileHash = await sha256Hex(parsed.data.csvText);
-      const parsedCsv = await parseDegiroAccountStatementCsv(parsed.data.csvText);
+      const parsedCsv = await parseDegiroAccountStatementCsv(
+        parsed.data.csvText,
+      );
       const resolveOrderFxRate = buildOrderFxRateResolver(parsedCsv.rows);
       const existingFingerprints = await loadExistingStatementFingerprints(
         parsed.data.accountId,
@@ -2756,8 +2868,10 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         if (cached) {
           return cached;
         }
-        const [existing] = await withTimedDb('degiro_statement_linked_trade', async () =>
-          db.execute(sql`
+        const [existing] = await withTimedDb(
+          'degiro_statement_linked_trade',
+          async () =>
+            db.execute(sql`
             select id
             from finances.asset_transactions
             where account_id = ${parsed.data.accountId}
@@ -3138,7 +3252,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
             rowFingerprint: row.rowFingerprint,
             status: 'failed',
             reason:
-              error instanceof Error ? error.message : 'Failed to import fee row.',
+              error instanceof Error
+                ? error.message
+                : 'Failed to import fee row.',
             externalReference: row.orderId,
             assetId: asset.id,
             transactionId: null,
@@ -3167,7 +3283,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       }
 
       for (const groupRows of dividendGroupMap.values()) {
-        const ordered = [...groupRows].sort((a, b) => a.rowNumber - b.rowNumber);
+        const ordered = [...groupRows].sort(
+          (a, b) => a.rowNumber - b.rowNumber,
+        );
         if (ordered.every((row) => resultsByRow.has(row.rowNumber))) {
           continue;
         }
@@ -3560,7 +3678,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         })
         .sort((a, b) => a.rowNumber - b.rowNumber);
 
-      const failedMissing = results.filter((row) => row.status === 'failed').length;
+      const failedMissing = results.filter(
+        (row) => row.status === 'failed',
+      ).length;
       if (failedMissing > failedRows) {
         failedRows = failedMissing;
       }
@@ -3811,6 +3931,10 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
   app.get('/finances/assets', async ({ query }) => {
     const type = query.type as string | undefined;
     const activeRaw = query.active as string | boolean | undefined;
+    const includeHoldingsRaw = query.includeHoldings as
+      | string
+      | boolean
+      | undefined;
     const filters: { type?: string; active?: boolean } = {};
     if (type) {
       filters.type = type;
@@ -3818,7 +3942,20 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     if (activeRaw !== undefined) {
       filters.active = String(activeRaw).toLowerCase() === 'true';
     }
-    return listAssetViews(filters);
+    const includeHoldings =
+      includeHoldingsRaw !== undefined &&
+      String(includeHoldingsRaw).toLowerCase() === 'true';
+
+    const rows = await listAssetViews(filters);
+    if (!includeHoldings) {
+      return rows;
+    }
+
+    const holdingsByAssetId = await listAssetHoldings();
+    return {
+      rows,
+      holdingsByAssetId,
+    };
   });
 
   app.post('/finances/assets', async ({ body, set }) => {
@@ -4175,22 +4312,24 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       const selectedAccount =
         selectedAccountId === 'all'
           ? null
-          : accountRows.find((row) => String(row.id) === selectedAccountId) ??
-            null;
+          : (accountRows.find((row) => String(row.id) === selectedAccountId) ??
+            null);
       const selectedAccountType =
         selectedAccount === null ? null : String(selectedAccount.accountType);
       const includeInvestmentData =
         selectedAccountId === 'all' ||
         isInvestmentAccountType(selectedAccountType);
       const includeSavingsCashData =
-        selectedAccountId === 'all' || isSavingsAccountType(selectedAccountType);
+        selectedAccountId === 'all' ||
+        isSavingsAccountType(selectedAccountType);
 
       const filteredSavingsRows =
         selectedAccountId === 'all'
           ? accountRows.filter((row) =>
               isSavingsAccountType(String(row.accountType)),
             )
-          : selectedAccount && isSavingsAccountType(String(selectedAccount.accountType))
+          : selectedAccount &&
+              isSavingsAccountType(String(selectedAccount.accountType))
             ? [selectedAccount]
             : [];
       const openingCash = filteredSavingsRows.reduce(
@@ -4615,7 +4754,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         const lastIndex = values.length - 1;
         const step = lastIndex / (MAX_RANGE_TREND_POINTS - 1);
         for (let index = 0; index < MAX_RANGE_TREND_POINTS; index += 1) {
-          result.push(values[Math.round(step * index)] ?? values[lastIndex] ?? 100);
+          result.push(
+            values[Math.round(step * index)] ?? values[lastIndex] ?? 100,
+          );
         }
         return result;
       };
@@ -4631,7 +4772,8 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         }
         const inRangePoints = list
           .filter(
-            (point) => point.pricedAtMs >= startTsMs && point.pricedAtMs <= endTsMs,
+            (point) =>
+              point.pricedAtMs >= startTsMs && point.pricedAtMs <= endTsMs,
           )
           .sort((a, b) => a.pricedAtMs - b.pricedAtMs);
 
@@ -4819,7 +4961,8 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         const prevTotal = prevPoint.totalValue;
         let intervalReturn = 0;
         if (Math.abs(prevTotal) >= RETURN_PCT_MIN_BASELINE_EUR) {
-          intervalReturn = (point.totalValue - prevTotal - intervalFlow) / prevTotal;
+          intervalReturn =
+            (point.totalValue - prevTotal - intervalFlow) / prevTotal;
           if (!Number.isFinite(intervalReturn)) {
             intervalReturn = 0;
           }
@@ -4895,7 +5038,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
                 : (avgBuyUnitEur ?? 0);
 
           const currentTotal = round2(quantity * currentUnitEur);
-          const rangePnlValueEur = round2(quantity * (currentUnitEur - startUnitEur));
+          const rangePnlValueEur = round2(
+            quantity * (currentUnitEur - startUnitEur),
+          );
           const rangePnlPct =
             startUnitEur <= 0
               ? 0
@@ -4926,8 +5071,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
 
       const rangeStartReferenceEur = round2(
         positions.reduce(
-          (sum, row) =>
-            sum + (row.currentTotalEur - row.periodPnlValueEur),
+          (sum, row) => sum + (row.currentTotalEur - row.periodPnlValueEur),
           0,
         ),
       );

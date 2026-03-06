@@ -1,24 +1,21 @@
 'use client';
 
 import type { Account } from '@second-brain/types';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { apiRequest } from '../../../lib/api';
 import { loadAccountsData } from '../../../lib/data/accounts-data';
 import { getApiErrorMessage } from '../../../lib/errors';
 import { formatDate, formatMoney } from '../../../lib/format';
-import {
-  Button,
-  Card,
-  ConfirmModal,
-  DataTable,
-  EmptyState,
-  ErrorState,
-  KpiCard,
-  LoadingSkeleton,
-  Modal,
-  PriceLineChart,
-} from '../../ui';
+import { Button } from '../../ui/button';
+import { Card } from '../../ui/card';
+import { PriceLineChart } from '../../ui/charts/price-line-chart';
+import { ConfirmModal } from '../../ui/confirm-modal';
+import { DataTable } from '../../ui/data-table';
+import { KpiCard } from '../../ui/kpi-card';
+import { Modal } from '../../ui/modal';
+import { EmptyState, ErrorState, LoadingSkeleton } from '../../ui/states';
 
 type CreatableAccountType =
   | 'savings'
@@ -36,9 +33,14 @@ const accountTypeLabel = (accountType: string) => {
   return accountType;
 };
 
-export function AccountsFeature() {
-  const [rows, setRows] = useState<Account[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+type AccountsFeatureProps = {
+  initialRows?: Account[];
+};
+
+export function AccountsFeature({ initialRows }: AccountsFeatureProps) {
+  const router = useRouter();
+  const [rows, setRows] = useState<Account[]>(initialRows ?? []);
+  const [isLoading, setIsLoading] = useState(initialRows === undefined);
   const [isCreating, setIsCreating] = useState(false);
   const [deletingAccountId, setDeletingAccountId] = useState<string | null>(
     null,
@@ -71,8 +73,11 @@ export function AccountsFeature() {
   }, []);
 
   useEffect(() => {
+    if (initialRows !== undefined) {
+      return;
+    }
     void load();
-  }, [load]);
+  }, [initialRows, load]);
 
   const createAccount = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -112,6 +117,7 @@ export function AccountsFeature() {
       setCurrentCash('0');
       setIsCreateModalOpen(false);
       await load();
+      router.refresh();
       setInfoMessage(`Account "${created.name}" created successfully.`);
     } catch (error) {
       setErrorMessage(getApiErrorMessage(error));
@@ -135,6 +141,7 @@ export function AccountsFeature() {
         method: 'DELETE',
       });
       await load();
+      router.refresh();
       setErrorMessage(null);
       setConfirmDeleteAccount(null);
     } catch (error) {
@@ -238,7 +245,9 @@ export function AccountsFeature() {
                 key: 'cash',
                 header: 'Cash EUR',
                 sortValue: (row: Account) =>
-                  row.accountType === 'savings' ? row.currentCashBalanceEur : null,
+                  row.accountType === 'savings'
+                    ? row.currentCashBalanceEur
+                    : null,
                 render: (row: Account) =>
                   row.accountType === 'savings' ? (
                     <span className="sb-sensitive-value">

@@ -3,20 +3,15 @@
 import type { Account } from '@second-brain/types';
 import { usePathname } from 'next/navigation';
 import type { ReactNode } from 'react';
-import { useEffect, useMemo, useState } from 'react';
-import { getAccountSlugById } from '../lib/account-slugs';
-import { loadAccountsData } from '../lib/data/accounts-data';
+import { useMemo } from 'react';
+import { buildAccountSlugMaps } from '../lib/account-slugs';
 import { useSensitiveMode } from './sensitive-mode-provider';
 import { useThemeMode } from './theme-provider';
-import {
-  AppShell,
-  type NavGroup,
-  type NavItem,
-  SensitiveToggle,
-  SideNav,
-  ThemeSelector,
-  TopNav,
-} from './ui';
+import { AppShell } from './ui/app-shell';
+import { SensitiveToggle } from './ui/sensitive-toggle';
+import { type NavGroup, type NavItem, SideNav } from './ui/side-nav';
+import { ThemeSelector } from './ui/theme-selector';
+import { TopNav } from './ui/top-nav';
 
 const configuredBasePath = process.env.NEXT_PUBLIC_BASE_PATH ?? '';
 const normalizedBasePath = (() => {
@@ -52,38 +47,25 @@ const navItems: NavItem[] = [
   { href: '/taxes', label: 'Taxes' },
 ];
 
-export function LayoutShell({ children }: { children: ReactNode }) {
+type LayoutShellProps = {
+  children: ReactNode;
+  initialAccounts: Account[];
+};
+
+export function LayoutShell({ children, initialAccounts }: LayoutShellProps) {
   const pathname = usePathname();
   const appPathname = useMemo(() => stripBasePath(pathname || '/'), [pathname]);
   const { mode, setMode } = useThemeMode();
   const { isSensitiveHidden, setSensitiveHidden } = useSensitiveMode();
-  const [accountRows, setAccountRows] = useState<Account[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const loadAccounts = async () => {
-      try {
-        const data = await loadAccountsData();
-        if (!cancelled) {
-          setAccountRows(data.rows);
-        }
-      } catch {
-        if (!cancelled) {
-          setAccountRows([]);
-        }
-      }
-    };
-
-    void loadAccounts();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const accountRows = initialAccounts;
+  const accountSlugMaps = useMemo(
+    () => buildAccountSlugMaps(accountRows),
+    [accountRows],
+  );
 
   const accountChildItems = useMemo(() => {
     return accountRows.map((account) => {
-      const slug = getAccountSlugById(account.id, accountRows) ?? account.id;
+      const slug = accountSlugMaps.slugsById.get(account.id) ?? account.id;
       const href = `/accounts/${encodeURIComponent(slug)}`;
       const active = appPathname === href || appPathname.startsWith(`${href}/`);
       return {
@@ -92,7 +74,7 @@ export function LayoutShell({ children }: { children: ReactNode }) {
         active,
       };
     });
-  }, [accountRows, appPathname]);
+  }, [accountRows, accountSlugMaps, appPathname]);
 
   const activeItems = navItems.map((item) => {
     const nextItem: NavItem = {

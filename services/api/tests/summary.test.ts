@@ -636,6 +636,31 @@ mock.module('@second-brain/db', () => {
           filtered.sort((a, b) => a.name.localeCompare(b.name));
           return Promise.resolve(filtered);
         }
+        if (
+          text.includes('from finances.asset_transactions') &&
+          text.includes('group by asset_id')
+        ) {
+          const totals = new Map<string, number>();
+          for (const row of state.assetTransactions) {
+            const direction =
+              row.transactionType === 'buy'
+                ? 1
+                : row.transactionType === 'sell'
+                  ? -1
+                  : 0;
+            if (direction === 0) continue;
+            const quantity = Number(row.quantity ?? 0);
+            if (!Number.isFinite(quantity)) continue;
+            const current = totals.get(row.assetId) ?? 0;
+            totals.set(row.assetId, current + direction * quantity);
+          }
+          return Promise.resolve(
+            [...totals.entries()].map(([assetId, quantity]) => ({
+              assetId,
+              quantity,
+            })),
+          );
+        }
         if (text.includes('with latest as')) {
           const bySymbol = new Map<string, PriceHistoryRow>();
           const sorted = [...state.priceHistory].sort(
@@ -1137,5 +1162,114 @@ describe('finances routes', () => {
       duplicateRes,
     );
     expect(duplicate.code).toBe('ASSET_ALREADY_EXISTS');
+  });
+
+  test('returns asset holdings when includeHoldings=true', async () => {
+    const app = buildApp();
+    const accountId = mkAccountId();
+    const assetId = mkAssetId();
+    const createdAt = now();
+
+    state.accounts.push({
+      id: accountId,
+      name: 'Main Broker',
+      currency: 'EUR',
+      baseCurrency: 'EUR',
+      openingBalanceEur: '0',
+      accountType: 'brokerage',
+      createdAt,
+      updatedAt: createdAt,
+    });
+    state.assets.push({
+      id: assetId,
+      name: 'iShares Core MSCI World',
+      assetType: 'etf',
+      subtype: null,
+      symbol: 'IWDA',
+      ticker: 'IWDA',
+      isin: 'IE00B4L5Y983',
+      exchange: null,
+      providerSymbol: 'IWDA.AS',
+      currency: 'EUR',
+      isActive: true,
+      notes: null,
+      createdAt,
+      updatedAt: createdAt,
+    });
+    state.assetTransactions.push(
+      {
+        id: mkAssetTxId(),
+        accountId,
+        assetId,
+        transactionType: 'buy',
+        tradedAt: createdAt,
+        quantity: '5',
+        unitPrice: '100',
+        tradeCurrency: 'EUR',
+        fxRateToEur: null,
+        cashImpactEur: '-500',
+        feesAmount: '0',
+        feesCurrency: null,
+        dividendGross: null,
+        withholdingTax: null,
+        dividendNet: null,
+        externalReference: null,
+        notes: null,
+        createdAt,
+        updatedAt: createdAt,
+      },
+      {
+        id: mkAssetTxId(),
+        accountId,
+        assetId,
+        transactionType: 'sell',
+        tradedAt: createdAt,
+        quantity: '2',
+        unitPrice: '120',
+        tradeCurrency: 'EUR',
+        fxRateToEur: null,
+        cashImpactEur: '240',
+        feesAmount: '0',
+        feesCurrency: null,
+        dividendGross: null,
+        withholdingTax: null,
+        dividendNet: null,
+        externalReference: null,
+        notes: null,
+        createdAt,
+        updatedAt: createdAt,
+      },
+    );
+
+    const response = await app.handle(
+      createRequest('/finances/assets?includeHoldings=true'),
+    );
+    expect(response.status).toBe(200);
+
+    const body = await parseResponse<{
+      rows: Array<{ id: string }>;
+      holdingsByAssetId: Record<string, number>;
+    }>(response);
+    expect(body.rows.some((row) => row.id === assetId)).toBe(true);
+    expect(body.holdingsByAssetId[assetId]).toBe(3);
+  });
+
+  test('validates transactions pagination query parameters', async () => {
+    const app = buildApp();
+
+    const invalidLimitRes = await app.handle(
+      createRequest('/finances/transactions?limit=0'),
+    );
+    expect(invalidLimitRes.status).toBe(400);
+
+    const invalidCursorRes = await app.handle(
+      createRequest('/finances/transactions?cursor=not-a-date'),
+    );
+    expect(invalidCursorRes.status).toBe(400);
+
+    const validRes = await app.handle(
+      createRequest('/finances/transactions?limit=10&cursor=2026-01-01T00:00:00.000Z'),
+    );
+    expect(validRes.status).toBe(200);
   });
 });

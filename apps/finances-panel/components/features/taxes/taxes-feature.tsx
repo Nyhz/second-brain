@@ -4,7 +4,10 @@ import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../../../lib/api';
 import { getApiErrorMessage } from '../../../lib/errors';
 import { formatMoney } from '../../../lib/format';
-import { Button, Card, ErrorState, KpiCard, LoadingSkeleton } from '../../ui';
+import { Button } from '../../ui/button';
+import { Card } from '../../ui/card';
+import { KpiCard } from '../../ui/kpi-card';
+import { ErrorState, LoadingSkeleton } from '../../ui/states';
 
 type TaxSummary = {
   year: number;
