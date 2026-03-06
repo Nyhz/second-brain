@@ -1,10 +1,11 @@
+import type { ReactNode } from 'react';
 import { Card } from './card';
 
 type KpiCardProps = {
   label: string;
-  value: string;
-  delta?: string;
-  subtext?: string;
+  value: ReactNode;
+  delta?: ReactNode;
+  subtext?: ReactNode;
 };
 
 export function KpiCard({ label, value, delta, subtext }: KpiCardProps) {

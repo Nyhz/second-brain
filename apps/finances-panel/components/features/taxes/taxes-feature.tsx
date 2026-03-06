@@ -4,13 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { apiRequest } from '../../../lib/api';
 import { getApiErrorMessage } from '../../../lib/errors';
 import { formatMoney } from '../../../lib/format';
-import {
-  Button,
-  Card,
-  ErrorState,
-  KpiCard,
-  LoadingSkeleton,
-} from '../../ui';
+import { Button, Card, ErrorState, KpiCard, LoadingSkeleton } from '../../ui';
 
 type TaxSummary = {
   year: number;
@@ -63,9 +57,16 @@ export function TaxesFeature() {
           <section className="grid gap-3 sm:grid-cols-2">
             <KpiCard
               label={`Realized Gain/Loss ${summary?.year ?? taxYear}`}
-              value={formatMoney(summary?.realizedGainLossEur ?? 0)}
+              value={
+                <span className="sb-sensitive-value">
+                  {formatMoney(summary?.realizedGainLossEur ?? 0)}
+                </span>
+              }
             />
-            <KpiCard label="Tax Year" value={String(summary?.year ?? taxYear)} />
+            <KpiCard
+              label="Tax Year"
+              value={String(summary?.year ?? taxYear)}
+            />
           </section>
 
           <Card title="Year-End Tax Summary">
@@ -88,7 +89,12 @@ export function TaxesFeature() {
                 {summary ? (
                   <>
                     <p>Year: {summary.year}</p>
-                    <p>Realized Gain/Loss: {formatMoney(summary.realizedGainLossEur)}</p>
+                    <p>
+                      Realized Gain/Loss:{' '}
+                      <span className="sb-sensitive-value">
+                        {formatMoney(summary.realizedGainLossEur)}
+                      </span>
+                    </p>
                   </>
                 ) : (
                   <p>No summary loaded.</p>

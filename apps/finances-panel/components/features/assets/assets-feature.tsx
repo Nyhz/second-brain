@@ -158,7 +158,9 @@ export function AssetsFeature() {
 
       setRows(assetsData.rows);
       setHoldingsByAssetId(
-        Object.fromEntries([...holdings.entries()].map(([id, qty]) => [id, qty])),
+        Object.fromEntries(
+          [...holdings.entries()].map(([id, qty]) => [id, qty]),
+        ),
       );
       setErrorMessage(null);
     } catch (error) {
@@ -178,8 +180,8 @@ export function AssetsFeature() {
   );
   const trackedCount = useMemo(
     () =>
-      rows.filter(
-        (row) => Boolean(row.providerSymbol ?? row.symbol ?? row.ticker),
+      rows.filter((row) =>
+        Boolean(row.providerSymbol ?? row.symbol ?? row.ticker),
       ).length,
     [rows],
   );
@@ -401,7 +403,7 @@ export function AssetsFeature() {
                     <div className="font-medium">{row.name}</div>
                     <div className="text-xs text-muted-foreground">
                       {row.symbol ??
-                        (row.assetType === 'crypto' ? '-' : row.isin ?? '-')}
+                        (row.assetType === 'crypto' ? '-' : (row.isin ?? '-'))}
                     </div>
                   </div>
                 ),
@@ -420,7 +422,7 @@ export function AssetsFeature() {
                 key: 'isin',
                 header: 'ISIN',
                 render: (row: AssetWithPosition) =>
-                  row.assetType === 'crypto' ? '' : row.isin ?? '-',
+                  row.assetType === 'crypto' ? '' : (row.isin ?? '-'),
               },
               {
                 key: 'quantity',
@@ -432,17 +434,25 @@ export function AssetsFeature() {
                 key: 'price',
                 header: 'Unit Price',
                 render: (row: AssetWithPosition) =>
-                  row.resolvedUnitPrice === null
-                    ? '-'
-                    : `${row.resolvedUnitPrice.toFixed(2)} ${row.currency}`,
+                  row.resolvedUnitPrice === null ? (
+                    '-'
+                  ) : (
+                    <span className="sb-sensitive-value">
+                      {`${row.resolvedUnitPrice.toFixed(2)} ${row.currency}`}
+                    </span>
+                  ),
               },
               {
                 key: 'value',
                 header: 'Current Value (EUR)',
                 render: (row: AssetWithPosition) =>
-                  row.currentValue === null
-                    ? '-'
-                    : formatMoney(row.currentValue),
+                  row.currentValue === null ? (
+                    '-'
+                  ) : (
+                    <span className="sb-sensitive-value">
+                      {formatMoney(row.currentValue)}
+                    </span>
+                  ),
               },
               {
                 key: 'status',

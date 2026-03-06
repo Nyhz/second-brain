@@ -223,6 +223,28 @@ button {
   background: linear-gradient(90deg, hsl(var(--primary)), hsl(var(--primary)));
 }
 
+.sb-sensitive-value {
+  display: inline-block;
+  transition: filter 140ms ease, opacity 140ms ease;
+}
+
+.sb-sensitive-chart {
+  transition: filter 140ms ease, opacity 140ms ease;
+}
+
+:root[data-sensitive="hidden"] .sb-sensitive-value {
+  filter: blur(0.38rem);
+  opacity: 0.9;
+  user-select: none;
+}
+
+:root[data-sensitive="hidden"] .sb-sensitive-chart {
+  filter: blur(0.46rem);
+  opacity: 0.92;
+  pointer-events: none;
+  user-select: none;
+}
+
 @media (max-width: 980px) {
   .two-col {
     grid-template-columns: 1fr;

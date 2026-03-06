@@ -149,7 +149,10 @@ export function AccountsFeature() {
 
   const netCash = useMemo(
     () =>
-      savingsRows.reduce((sum, row) => sum + Number(row.currentCashBalanceEur), 0),
+      savingsRows.reduce(
+        (sum, row) => sum + Number(row.currentCashBalanceEur),
+        0,
+      ),
     [savingsRows],
   );
   const positive = savingsRows.filter(
@@ -182,7 +185,12 @@ export function AccountsFeature() {
       ) : null}
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard label="Net Cash (EUR)" value={formatMoney(netCash)} />
+        <KpiCard
+          label="Net Cash (EUR)"
+          value={
+            <span className="sb-sensitive-value">{formatMoney(netCash)}</span>
+          }
+        />
         <KpiCard label="Non-Negative Savings" value={String(positive)} />
         <KpiCard label="Savings Accounts" value={String(savingsRows.length)} />
         <KpiCard label="Total Accounts" value={String(rows.length)} />
@@ -192,7 +200,9 @@ export function AccountsFeature() {
         {chartRows.length === 0 ? (
           <EmptyState message="No savings balances to chart yet." />
         ) : (
-          <PriceLineChart data={chartRows} />
+          <div className="sb-sensitive-chart">
+            <PriceLineChart data={chartRows} />
+          </div>
         )}
       </Card>
 
@@ -223,9 +233,13 @@ export function AccountsFeature() {
                 key: 'cash',
                 header: 'Cash EUR',
                 render: (row: Account) =>
-                  row.accountType === 'savings'
-                    ? formatMoney(row.currentCashBalanceEur)
-                    : '-',
+                  row.accountType === 'savings' ? (
+                    <span className="sb-sensitive-value">
+                      {formatMoney(row.currentCashBalanceEur)}
+                    </span>
+                  ) : (
+                    '-'
+                  ),
               },
               {
                 key: 'created',
@@ -292,7 +306,9 @@ export function AccountsFeature() {
               <option value="savings">Savings</option>
               <option value="brokerage">Broker</option>
               <option value="crypto_exchange">Exchange</option>
-              <option value="investment_platform">Investment Fund Account</option>
+              <option value="investment_platform">
+                Investment Fund Account
+              </option>
             </select>
           </div>
 
@@ -314,7 +330,12 @@ export function AccountsFeature() {
             </div>
           ) : null}
 
-          <Button type="submit" variant="primary" disabled={isCreating} fullWidth>
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={isCreating}
+            fullWidth
+          >
             {isCreating ? 'Creating...' : 'Create Account'}
           </Button>
         </form>

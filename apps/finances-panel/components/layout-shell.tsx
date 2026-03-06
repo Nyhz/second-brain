@@ -2,11 +2,13 @@
 
 import { usePathname } from 'next/navigation';
 import type { ReactNode } from 'react';
+import { useSensitiveMode } from './sensitive-mode-provider';
 import { useThemeMode } from './theme-provider';
 import {
   AppShell,
   type NavGroup,
   type NavItem,
+  SensitiveToggle,
   SideNav,
   ThemeSelector,
   TopNav,
@@ -32,6 +34,7 @@ const navItems: NavItem[] = [
 export function LayoutShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const { mode, setMode } = useThemeMode();
+  const { isSensitiveHidden, setSensitiveHidden } = useSensitiveMode();
   const activeItems = navItems.map((item) => ({
     ...item,
     active:
@@ -56,7 +59,16 @@ export function LayoutShell({ children }: { children: ReactNode }) {
         <TopNav
           title="Portfolio Operations"
           eyebrow="Second Brain Finances"
-          right={<ThemeSelector value={mode} onChange={setMode} compact />}
+          right={
+            <div className="flex items-center gap-2">
+              <SensitiveToggle
+                value={isSensitiveHidden}
+                onChange={setSensitiveHidden}
+                compact
+              />
+              <ThemeSelector value={mode} onChange={setMode} compact />
+            </div>
+          }
         />
       }
       sideNav={<SideNav groups={navGroups} items={activeItems} />}

@@ -184,13 +184,21 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard
           label="Total Value"
-          value={formatMoney(data.totalValue)}
+          value={
+            <span className="sb-sensitive-value">
+              {formatMoney(data.totalValue)}
+            </span>
+          }
           subtext={`As of ${formatDateTime(data.asOfIso)}`}
         />
         <KpiCard
           label={`Return ${data.range}`}
           value={formatSignedPercent(data.deltaPct)}
-          delta={formatSignedMoney(data.deltaValue)}
+          delta={
+            <span className="sb-sensitive-value">
+              {formatSignedMoney(data.deltaValue)}
+            </span>
+          }
         />
         <KpiCard
           label="Open Positions"
@@ -207,8 +215,11 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
       <Card title="Performance" contentClassName="space-y-4 px-0 pb-0 pt-4">
         <div className="px-5">
           <p className="text-sm text-muted-foreground">
-            Market-only performance (cash flows neutralized) · Total valuation {formatMoney(data.totalValue)} · as of{' '}
-            {formatDateTime(data.asOfIso)}
+            Market-only performance (cash flows neutralized) · Total valuation{' '}
+            <span className="sb-sensitive-value">
+              {formatMoney(data.totalValue)}
+            </span>{' '}
+            · as of {formatDateTime(data.asOfIso)}
           </p>
         </div>
 
@@ -221,10 +232,9 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
             <EmptyState message="No performance data available yet." />
           </div>
         ) : (
-          <AreaPerformanceChart
-            data={chartData}
-            baselineValue={100}
-          />
+          <div className="sb-sensitive-chart">
+            <AreaPerformanceChart data={chartData} baselineValue={100} />
+          </div>
         )}
       </Card>
 
@@ -263,35 +273,52 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
                   key: 'avg-unit',
                   header: 'Avg Buy / Unit',
                   render: (row: OverviewPositionRow) =>
-                    row.avgBuyUnitEur === null
-                      ? '-'
-                      : formatMoney(row.avgBuyUnitEur),
+                    row.avgBuyUnitEur === null ? (
+                      '-'
+                    ) : (
+                      <span className="sb-sensitive-value">
+                        {formatMoney(row.avgBuyUnitEur)}
+                      </span>
+                    ),
                 },
                 {
                   key: 'avg-total',
                   header: 'Avg Buy / Total',
                   render: (row: OverviewPositionRow) =>
-                    row.avgBuyTotalEur === null
-                      ? '-'
-                      : formatMoney(row.avgBuyTotalEur),
+                    row.avgBuyTotalEur === null ? (
+                      '-'
+                    ) : (
+                      <span className="sb-sensitive-value">
+                        {formatMoney(row.avgBuyTotalEur)}
+                      </span>
+                    ),
                 },
                 {
                   key: 'cur-unit-quote',
                   header: 'Current / Unit (Quote)',
-                  render: (row: OverviewPositionRow) =>
-                    formatQuoteUnit(row.currentUnitQuote, row.quoteCurrency),
+                  render: (row: OverviewPositionRow) => (
+                    <span className="sb-sensitive-value">
+                      {formatQuoteUnit(row.currentUnitQuote, row.quoteCurrency)}
+                    </span>
+                  ),
                 },
                 {
                   key: 'cur-unit',
                   header: 'Current / Unit (EUR)',
-                  render: (row: OverviewPositionRow) =>
-                    formatMoney(row.currentUnitEur),
+                  render: (row: OverviewPositionRow) => (
+                    <span className="sb-sensitive-value">
+                      {formatMoney(row.currentUnitEur)}
+                    </span>
+                  ),
                 },
                 {
                   key: 'cur-total',
                   header: 'Current / Total',
-                  render: (row: OverviewPositionRow) =>
-                    formatMoney(row.currentTotalEur),
+                  render: (row: OverviewPositionRow) => (
+                    <span className="sb-sensitive-value">
+                      {formatMoney(row.currentTotalEur)}
+                    </span>
+                  ),
                 },
                 {
                   key: 'pnl',
@@ -305,7 +332,10 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
                       }
                     >
                       {formatSignedPercent(row.periodPnlPct)} (
-                      {formatSignedMoney(row.periodPnlValueEur)})
+                      <span className="sb-sensitive-value">
+                        {formatSignedMoney(row.periodPnlValueEur)}
+                      </span>
+                      )
                     </span>
                   ),
                 },

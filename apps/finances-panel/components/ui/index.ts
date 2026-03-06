@@ -5,6 +5,7 @@ export * from './confirm-modal';
 export * from './data-table';
 export * from './kpi-card';
 export * from './modal';
+export * from './sensitive-toggle';
 export * from './side-nav';
 export * from './states';
 export * from './theme-selector';

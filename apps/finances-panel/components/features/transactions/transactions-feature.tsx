@@ -105,9 +105,7 @@ const isInvestmentAccount = (accountType: string) =>
   accountType === 'investment_platform';
 
 const toLabel = (value: string) =>
-  value
-    .replace(/_/g, ' ')
-    .replace(/\b\w/g, (char) => char.toUpperCase());
+  value.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
 
 const getRowTypeKey = (row: UnifiedTransactionRow) =>
   row.rowKind === 'asset_transaction'
@@ -150,9 +148,8 @@ export function TransactionsFeature() {
   const [importAccountId, setImportAccountId] = useState('');
   const [importDryRun, setImportDryRun] = useState(true);
   const [importFile, setImportFile] = useState<File | null>(null);
-  const [importResult, setImportResult] = useState<TransactionsImportResult | null>(
-    null,
-  );
+  const [importResult, setImportResult] =
+    useState<TransactionsImportResult | null>(null);
 
   const [form, setForm] = useState<TransactionFormInput>(initialForm());
 
@@ -177,7 +174,8 @@ export function TransactionsFeature() {
   }, []);
 
   const investmentAccounts = useMemo(
-    () => accounts.filter((account) => isInvestmentAccount(account.accountType)),
+    () =>
+      accounts.filter((account) => isInvestmentAccount(account.accountType)),
     [accounts],
   );
   const brokerageAccounts = useMemo(
@@ -185,11 +183,15 @@ export function TransactionsFeature() {
     [accounts],
   );
   const exchangeAccounts = useMemo(
-    () => accounts.filter((account) => account.accountType === 'crypto_exchange'),
+    () =>
+      accounts.filter((account) => account.accountType === 'crypto_exchange'),
     [accounts],
   );
   const investmentFundAccounts = useMemo(
-    () => accounts.filter((account) => account.accountType === 'investment_platform'),
+    () =>
+      accounts.filter(
+        (account) => account.accountType === 'investment_platform',
+      ),
     [accounts],
   );
   const savingsAccounts = useMemo(
@@ -197,10 +199,7 @@ export function TransactionsFeature() {
     [accounts],
   );
   const createAccounts = useMemo(
-    () =>
-      createMode === 'deposit'
-        ? savingsAccounts
-        : investmentAccounts,
+    () => (createMode === 'deposit' ? savingsAccounts : investmentAccounts),
     [createMode, investmentAccounts, savingsAccounts],
   );
   const importAccounts = useMemo(
@@ -303,7 +302,9 @@ export function TransactionsFeature() {
     try {
       if (createMode === 'deposit') {
         if (!form.accountId) {
-          setErrorMessage('Select a savings account before creating a deposit.');
+          setErrorMessage(
+            'Select a savings account before creating a deposit.',
+          );
           return;
         }
         const amount = Number(depositAmount || '0');
@@ -363,9 +364,12 @@ export function TransactionsFeature() {
 
     setDeletingTransactionId(confirmDeleteTransaction.id);
     try {
-      await apiRequest(`/finances/asset-transactions/${confirmDeleteTransaction.id}`, {
-        method: 'DELETE',
-      });
+      await apiRequest(
+        `/finances/asset-transactions/${confirmDeleteTransaction.id}`,
+        {
+          method: 'DELETE',
+        },
+      );
       await load();
       setErrorMessage(null);
       setConfirmDeleteTransaction(null);
@@ -414,18 +418,15 @@ export function TransactionsFeature() {
           : importSource === 'binance'
             ? '/finances/import/binance-transactions'
             : '/finances/import/cobas-transactions';
-      const result = await apiRequest<TransactionsImportResult>(
-        endpoint,
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            accountId: importAccountId,
-            fileName: importFile.name,
-            csvText,
-            dryRun: importDryRun,
-          }),
-        },
-      );
+      const result = await apiRequest<TransactionsImportResult>(endpoint, {
+        method: 'POST',
+        body: JSON.stringify({
+          accountId: importAccountId,
+          fileName: importFile.name,
+          csvText,
+          dryRun: importDryRun,
+        }),
+      });
       setImportResult(result);
       setErrorMessage(null);
       await load();
@@ -520,8 +521,7 @@ export function TransactionsFeature() {
     return rows.filter((row) => {
       const matchesType =
         typeFilter === 'all' || getRowTypeKey(row) === typeFilter;
-      const matchesAsset =
-        assetFilter === 'all' || row.assetId === assetFilter;
+      const matchesAsset = assetFilter === 'all' || row.assetId === assetFilter;
       const matchesAssetType =
         assetTypeFilter === 'all' || row.assetType === assetTypeFilter;
       return matchesType && matchesAsset && matchesAssetType;
@@ -550,13 +550,18 @@ export function TransactionsFeature() {
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Transactions</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">
+            Transactions
+          </h1>
           <p className="text-sm text-muted-foreground">
             Register operations and import DEGIRO, Binance, or COBAS CSV files.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" onClick={() => setIsImportModalOpen(true)}>
+          <Button
+            variant="secondary"
+            onClick={() => setIsImportModalOpen(true)}
+          >
             Import CSV
           </Button>
           <Button variant="primary" onClick={() => setIsCreateModalOpen(true)}>
@@ -568,8 +573,20 @@ export function TransactionsFeature() {
       {errorMessage ? <ErrorState message={errorMessage} /> : null}
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        <KpiCard label="Buy Outflows" value={formatMoney(totalBuys)} />
-        <KpiCard label="Sell Inflows" value={formatMoney(totalSells)} />
+        <KpiCard
+          label="Buy Outflows"
+          value={
+            <span className="sb-sensitive-value">{formatMoney(totalBuys)}</span>
+          }
+        />
+        <KpiCard
+          label="Sell Inflows"
+          value={
+            <span className="sb-sensitive-value">
+              {formatMoney(totalSells)}
+            </span>
+          }
+        />
         <KpiCard label="Transactions" value={String(rows.length)} />
       </section>
 
@@ -670,14 +687,20 @@ export function TransactionsFeature() {
                 {
                   key: 'native',
                   header: 'Amount',
-                  render: (row: UnifiedTransactionRow) =>
-                    formatAmountWithCurrency(row.amountNative, row.currency),
+                  render: (row: UnifiedTransactionRow) => (
+                    <span className="sb-sensitive-value">
+                      {formatAmountWithCurrency(row.amountNative, row.currency)}
+                    </span>
+                  ),
                 },
                 {
                   key: 'cash',
                   header: 'Cash Impact EUR',
-                  render: (row: UnifiedTransactionRow) =>
-                    formatMoney(row.cashImpactEur),
+                  render: (row: UnifiedTransactionRow) => (
+                    <span className="sb-sensitive-value">
+                      {formatMoney(row.cashImpactEur)}
+                    </span>
+                  ),
                 },
                 {
                   key: 'actions',
@@ -706,18 +729,26 @@ export function TransactionsFeature() {
             <div className="mt-3 flex items-center justify-between gap-3 text-sm text-muted-foreground">
               <p>
                 Showing {(activeTimelinePage - 1) * timelinePageSize + 1}-
-                {Math.min(activeTimelinePage * timelinePageSize, filteredRows.length)} of{' '}
-                {filteredRows.length}
+                {Math.min(
+                  activeTimelinePage * timelinePageSize,
+                  filteredRows.length,
+                )}{' '}
+                of {filteredRows.length}
               </p>
               <div className="flex items-center gap-2">
-                <label className="text-xs uppercase tracking-wide" htmlFor="timeline-page-size">
+                <label
+                  className="text-xs uppercase tracking-wide"
+                  htmlFor="timeline-page-size"
+                >
                   Rows
                 </label>
                 <select
                   id="timeline-page-size"
                   className="rounded-md border border-input bg-background px-2 py-1 text-sm"
                   value={timelinePageSize}
-                  onChange={(event) => setTimelinePageSize(Number(event.target.value))}
+                  onChange={(event) =>
+                    setTimelinePageSize(Number(event.target.value))
+                  }
                 >
                   <option value={10}>10</option>
                   <option value={25}>25</option>
@@ -767,7 +798,10 @@ export function TransactionsFeature() {
       >
         <form className="grid gap-4" onSubmit={createTransaction}>
           <div className="grid gap-1.5">
-            <label className="text-sm font-medium" htmlFor="transaction-create-mode">
+            <label
+              className="text-sm font-medium"
+              htmlFor="transaction-create-mode"
+            >
               Entry Type
             </label>
             <select
@@ -784,7 +818,10 @@ export function TransactionsFeature() {
           </div>
 
           <div className="grid gap-1.5">
-            <label className="text-sm font-medium" htmlFor="transaction-account">
+            <label
+              className="text-sm font-medium"
+              htmlFor="transaction-account"
+            >
               Account
             </label>
             <select
@@ -816,7 +853,10 @@ export function TransactionsFeature() {
             <>
               <div className="grid gap-1.5 sm:grid-cols-2 sm:gap-4">
                 <div className="grid gap-1.5">
-                  <label className="text-sm font-medium" htmlFor="transaction-type">
+                  <label
+                    className="text-sm font-medium"
+                    htmlFor="transaction-type"
+                  >
                     Transaction Type
                   </label>
                   <select
@@ -826,7 +866,8 @@ export function TransactionsFeature() {
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
-                        transactionType: event.target.value as AssetTransactionType,
+                        transactionType: event.target
+                          .value as AssetTransactionType,
                       }))
                     }
                   >
@@ -872,7 +913,10 @@ export function TransactionsFeature() {
               </div>
 
               <div className="grid gap-1.5">
-                <label className="text-sm font-medium" htmlFor="transaction-asset">
+                <label
+                  className="text-sm font-medium"
+                  htmlFor="transaction-asset"
+                >
                   Asset
                 </label>
                 <select
@@ -899,7 +943,10 @@ export function TransactionsFeature() {
           ) : null}
 
           <div className="grid gap-1.5">
-            <label className="text-sm font-medium" htmlFor="transaction-traded-at">
+            <label
+              className="text-sm font-medium"
+              htmlFor="transaction-traded-at"
+            >
               Date / Time
             </label>
             <input
@@ -919,7 +966,10 @@ export function TransactionsFeature() {
 
           {createMode === 'deposit' ? (
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium" htmlFor="transaction-deposit">
+              <label
+                className="text-sm font-medium"
+                htmlFor="transaction-deposit"
+              >
                 Deposit Amount (EUR)
               </label>
               <input
@@ -936,10 +986,14 @@ export function TransactionsFeature() {
           ) : null}
 
           {createMode === 'asset_transaction' &&
-          (form.transactionType === 'buy' || form.transactionType === 'sell') ? (
+          (form.transactionType === 'buy' ||
+            form.transactionType === 'sell') ? (
             <div className="grid gap-1.5 sm:grid-cols-2 sm:gap-4">
               <div className="grid gap-1.5">
-                <label className="text-sm font-medium" htmlFor="transaction-quantity">
+                <label
+                  className="text-sm font-medium"
+                  htmlFor="transaction-quantity"
+                >
                   Quantity
                 </label>
                 <input
@@ -955,7 +1009,10 @@ export function TransactionsFeature() {
                 />
               </div>
               <div className="grid gap-1.5">
-                <label className="text-sm font-medium" htmlFor="transaction-unit-price">
+                <label
+                  className="text-sm font-medium"
+                  htmlFor="transaction-unit-price"
+                >
                   Unit Price
                 </label>
                 <input
@@ -973,7 +1030,8 @@ export function TransactionsFeature() {
             </div>
           ) : null}
 
-          {createMode === 'asset_transaction' && form.transactionType === 'dividend' ? (
+          {createMode === 'asset_transaction' &&
+          form.transactionType === 'dividend' ? (
             <>
               <div className="grid gap-1.5 sm:grid-cols-2 sm:gap-4">
                 <div className="grid gap-1.5">
@@ -1017,9 +1075,13 @@ export function TransactionsFeature() {
               </div>
               <p className="text-xs text-muted-foreground">
                 Retention (auto):{' '}
-                {withholdingPreview === null
-                  ? 'Enter gross/net values'
-                  : formatMoney(withholdingPreview)}
+                {withholdingPreview === null ? (
+                  'Enter gross/net values'
+                ) : (
+                  <span className="sb-sensitive-value">
+                    {formatMoney(withholdingPreview)}
+                  </span>
+                )}
               </p>
             </>
           ) : null}
@@ -1028,7 +1090,10 @@ export function TransactionsFeature() {
             <>
               <div className="grid gap-1.5 sm:grid-cols-2 sm:gap-4">
                 <div className="grid gap-1.5">
-                  <label className="text-sm font-medium" htmlFor="transaction-currency">
+                  <label
+                    className="text-sm font-medium"
+                    htmlFor="transaction-currency"
+                  >
                     Currency
                   </label>
                   <select
@@ -1040,7 +1105,9 @@ export function TransactionsFeature() {
                         ...current,
                         tradeCurrency: event.target.value,
                         fxRateToEur:
-                          event.target.value === 'EUR' ? '' : current.fxRateToEur,
+                          event.target.value === 'EUR'
+                            ? ''
+                            : current.fxRateToEur,
                       }))
                     }
                     required
@@ -1050,7 +1117,10 @@ export function TransactionsFeature() {
                   </select>
                 </div>
                 <div className="grid gap-1.5">
-                  <label className="text-sm font-medium" htmlFor="transaction-fx-rate">
+                  <label
+                    className="text-sm font-medium"
+                    htmlFor="transaction-fx-rate"
+                  >
                     FX Rate (to EUR)
                   </label>
                   <input
@@ -1071,7 +1141,10 @@ export function TransactionsFeature() {
 
               {form.transactionType !== 'dividend' ? (
                 <div className="grid gap-1.5">
-                  <label className="text-sm font-medium" htmlFor="transaction-fees">
+                  <label
+                    className="text-sm font-medium"
+                    htmlFor="transaction-fees"
+                  >
                     Fees (EUR)
                   </label>
                   <input
@@ -1091,7 +1164,10 @@ export function TransactionsFeature() {
             </>
           ) : (
             <div className="grid gap-1.5">
-              <label className="text-sm font-medium" htmlFor="transaction-deposit-currency">
+              <label
+                className="text-sm font-medium"
+                htmlFor="transaction-deposit-currency"
+              >
                 Currency
               </label>
               <input
@@ -1122,11 +1198,15 @@ export function TransactionsFeature() {
 
           <p className="text-xs text-muted-foreground">
             Cash impact preview:{' '}
-            {Number.isFinite(cashImpactPreview)
-              ? formatMoney(cashImpactPreview)
-              : createMode === 'deposit'
-                ? 'invalid amount'
-                : 'requires FX'}
+            {Number.isFinite(cashImpactPreview) ? (
+              <span className="sb-sensitive-value">
+                {formatMoney(cashImpactPreview)}
+              </span>
+            ) : createMode === 'deposit' ? (
+              'invalid amount'
+            ) : (
+              'requires FX'
+            )}
           </p>
 
           <Button type="submit" variant="primary" disabled={isSaving} fullWidth>
@@ -1223,7 +1303,12 @@ export function TransactionsFeature() {
             Dry run (validate and persist import report without inserts)
           </label>
 
-          <Button type="submit" variant="primary" disabled={isImporting} fullWidth>
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={isImporting}
+            fullWidth
+          >
             {isImporting
               ? 'Importing...'
               : importDryRun
@@ -1241,8 +1326,7 @@ export function TransactionsFeature() {
                 : importResult.source === 'binance'
                   ? 'Binance Transactions'
                   : 'COBAS Transactions'}{' '}
-              ·{' '}
-              {importResult.dryRun ? 'Dry run' : 'Committed'} · Rows{' '}
+              · {importResult.dryRun ? 'Dry run' : 'Committed'} · Rows{' '}
               {importResult.totalRows}
             </p>
             <div className="flex flex-wrap gap-2 text-xs text-muted-foreground">
