@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import { useEffect, useMemo, useState } from 'react';
 import { cn } from '../../lib/utils';
 
@@ -21,9 +22,59 @@ type SideNavProps = {
   groups?: NavGroup[];
 };
 
+const configuredBasePath = process.env.NEXT_PUBLIC_BASE_PATH ?? '';
+const normalizedBasePath = (() => {
+  if (!configuredBasePath || configuredBasePath === '/') {
+    return '';
+  }
+  const withLeadingSlash = configuredBasePath.startsWith('/')
+    ? configuredBasePath
+    : `/${configuredBasePath}`;
+  return withLeadingSlash.endsWith('/')
+    ? withLeadingSlash.slice(0, -1)
+    : withLeadingSlash;
+})();
+
+const stripBasePath = (path: string) => {
+  if (!normalizedBasePath) {
+    return path || '/';
+  }
+  if (path === normalizedBasePath) {
+    return '/';
+  }
+  if (path.startsWith(`${normalizedBasePath}/`)) {
+    return path.slice(normalizedBasePath.length);
+  }
+  return path || '/';
+};
+
+const withActiveState = (item: NavItem, appPathname: string): NavItem => {
+  const children = item.children?.map((child) =>
+    withActiveState(child, appPathname),
+  );
+  const active =
+    item.href === '/'
+      ? appPathname === '/'
+      : appPathname === item.href || appPathname.startsWith(`${item.href}/`);
+
+  return {
+    ...item,
+    active,
+    ...(children ? { children } : {}),
+  };
+};
+
 export function SideNav({ items = [], groups }: SideNavProps) {
-  const groupedItems =
-    groups && groups.length > 0 ? groups : [{ label: 'Navigation', items }];
+  const pathname = usePathname();
+  const appPathname = stripBasePath(pathname || '/');
+  const groupedItems = useMemo(() => {
+    const sourceGroups =
+      groups && groups.length > 0 ? groups : [{ label: 'Navigation', items }];
+    return sourceGroups.map((group) => ({
+      ...group,
+      items: group.items.map((item) => withActiveState(item, appPathname)),
+    }));
+  }, [appPathname, groups, items]);
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const parentItems = useMemo(
     () =>

@@ -14,7 +14,10 @@
   "include": [
     "next-env.d.ts",
     "app",
+    "components",
     "lib",
+    "tests",
+    "types",
     ".next/types/**/*.ts"
   ],
   "exclude": [

@@ -1,16 +1,17 @@
-import { loadAppEnv } from '@second-brain/config';
 import { type ApiError, apiErrorSchema } from '@second-brain/types';
-
-const env = loadAppEnv(
-  (globalThis as { process?: { env?: Record<string, string | undefined> } })
-    .process?.env ?? {},
-);
 
 const serverSide = typeof window === 'undefined';
 export const API_BASE = serverSide
-  ? env.INTERNAL_API_URL
-  : env.NEXT_PUBLIC_API_URL;
+  ? process.env.INTERNAL_API_URL ?? process.env.NEXT_PUBLIC_API_URL ?? ''
+  : process.env.NEXT_PUBLIC_API_URL ?? '';
 const inFlightBrowserGets = new Map<string, Promise<unknown>>();
+
+type ApiRequestInit = RequestInit & {
+  next?: {
+    revalidate?: number | false;
+    tags?: string[];
+  };
+};
 
 export class ApiRequestError extends Error {
   readonly status: number;
@@ -28,16 +29,17 @@ export class ApiRequestError extends Error {
 
 export async function apiRequest<T>(
   path: string,
-  init?: RequestInit,
+  init?: ApiRequestInit,
 ): Promise<T> {
   const performRequest = async () => {
+    const headers = new Headers(init?.headers);
+    if (init?.body && !headers.has('content-type')) {
+      headers.set('content-type', 'application/json');
+    }
+
     const res = await fetch(`${API_BASE}${path}`, {
       ...init,
-      headers: {
-        'content-type': 'application/json',
-        ...(init?.headers ?? {}),
-      },
-      cache: 'no-store',
+      headers,
     });
 
     if (!res.ok) {

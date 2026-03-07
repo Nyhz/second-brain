@@ -1,23 +1,39 @@
-'use client';
-
-import { useMemo, useState } from 'react';
+import Link from 'next/link';
+import dynamic from 'next/dynamic';
 import type {
-  OverviewPositionRow,
   OverviewRange,
   OverviewState,
 } from '../lib/dashboard-types';
-import { loadOverview } from '../lib/data/overview-data';
 import { formatDateTime, formatMoney } from '../lib/format';
 import { cn } from '../lib/utils';
-import { Button } from './ui/button';
 import { Card } from './ui/card';
-import { AreaPerformanceChart } from './ui/charts/area-performance-chart';
-import { Sparkline } from './ui/charts/sparkline';
-import { DataTable } from './ui/data-table';
 import { KpiCard } from './ui/kpi-card';
+import { OverviewPositionsTable } from './overview-positions-table';
 import { EmptyState } from './ui/states';
 
 const RANGES: OverviewRange[] = ['1W', '1M', 'YTD', '1Y', 'MAX'];
+const filterButtonBase =
+  'inline-flex h-8 items-center rounded-md border border-border/70 bg-card/70 px-3 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground';
+
+const AreaPerformanceChart = dynamic(
+  () =>
+    import('./ui/charts/area-performance-chart').then((module) => ({
+      default: module.AreaPerformanceChart,
+    })),
+  {
+    loading: () => <ChartSkeleton height={280} />,
+  },
+);
+
+const Sparkline = dynamic(
+  () =>
+    import('./ui/charts/sparkline').then((module) => ({
+      default: module.Sparkline,
+    })),
+  {
+    loading: () => <SparklineSkeleton />,
+  },
+);
 
 const formatSignedPercent = (value: number) =>
   `${value >= 0 ? '+' : ''}${value.toFixed(2)}%`;
@@ -41,20 +57,13 @@ type OverviewDashboardProps = {
 };
 
 export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
-  const [data, setData] = useState(initialData);
-  const [loading, setLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  const chartData = useMemo(
-    () =>
-      data.series.map((point) => ({
-        label: labelForPoint(point.tsIso, data.range),
-        marketIndex: point.marketIndex,
-        totalValue: point.totalValue,
-        dateIso: point.tsIso,
-      })),
-    [data.range, data.series],
-  );
+  const data = initialData;
+  const chartData = data.series.map((point) => ({
+    label: labelForPoint(point.tsIso, data.range),
+    marketIndex: point.marketIndex,
+    totalValue: point.totalValue,
+    dateIso: point.tsIso,
+  }));
   const selectedAccountName =
     data.accountId === 'all'
       ? 'All Accounts'
@@ -66,26 +75,6 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
       : (data.accounts.find((account) => account.id === data.accountId)
           ?.accountType ?? null);
   const shouldShowPositions = selectedAccountType !== 'savings';
-  const filterButtonBase =
-    'h-8 rounded-md border-border/70 bg-card/70 px-3 text-xs text-muted-foreground hover:bg-muted hover:text-foreground';
-
-  const onFilterChange = async (next: {
-    range?: OverviewRange;
-    accountId?: string;
-  }) => {
-    const nextRange = next.range ?? data.range;
-    const nextAccountId = next.accountId ?? data.accountId;
-    setLoading(true);
-    setErrorMessage(null);
-    try {
-      const nextData = await loadOverview(nextRange, nextAccountId);
-      setData(nextData);
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : String(error));
-    } finally {
-      setLoading(false);
-    }
-  };
 
   return (
     <div className="space-y-6">
@@ -97,73 +86,33 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
           </p>
         </div>
         <div className="flex w-full flex-col gap-3 xl:max-w-[980px] xl:flex-row xl:items-end">
-          <div className="space-y-2 xl:flex-1">
-            <p className="text-[11px] font-medium uppercase tracking-[0.13em] text-muted-foreground">
-              Account
-            </p>
-            <div
-              className="flex flex-wrap gap-2"
-              role="tablist"
-              aria-label="Account filter"
-            >
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                className={cn(
-                  filterButtonBase,
-                  data.accountId === 'all' && 'bg-muted text-foreground',
-                )}
-                onClick={() => void onFilterChange({ accountId: 'all' })}
-                disabled={loading}
-              >
-                All Accounts
-              </Button>
-              {data.accounts.map((account) => (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  key={account.id}
-                  className={cn(
-                    filterButtonBase,
-                    data.accountId === account.id && 'bg-muted text-foreground',
-                  )}
-                  onClick={() => void onFilterChange({ accountId: account.id })}
-                  disabled={loading}
-                >
-                  {account.name}
-                </Button>
-              ))}
-            </div>
-          </div>
-          <div className="space-y-2 xl:min-w-[320px]">
-            <p className="text-[11px] font-medium uppercase tracking-[0.13em] text-muted-foreground xl:text-right">
-              Range
-            </p>
-            <div
-              className="flex flex-wrap gap-2 xl:justify-end"
-              role="tablist"
-              aria-label="Range filter"
-            >
-              {RANGES.map((range) => (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="secondary"
-                  key={range}
-                  className={cn(
-                    filterButtonBase,
-                    data.range === range && 'bg-muted text-foreground',
-                  )}
-                  onClick={() => void onFilterChange({ range })}
-                  disabled={loading}
-                >
-                  {range}
-                </Button>
-              ))}
-            </div>
-          </div>
+          <FilterGroup
+            label="Account"
+            ariaLabel="Account filter"
+            align="start"
+            items={[
+              {
+                href: buildOverviewHref(data.range, 'all'),
+                label: 'All Accounts',
+                active: data.accountId === 'all',
+              },
+              ...data.accounts.map((account) => ({
+                href: buildOverviewHref(data.range, account.id),
+                label: account.name,
+                active: data.accountId === account.id,
+              })),
+            ]}
+          />
+          <FilterGroup
+            label="Range"
+            ariaLabel="Range filter"
+            align="end"
+            items={RANGES.map((range) => ({
+              href: buildOverviewHref(range, data.accountId),
+              label: range,
+              active: data.range === range,
+            }))}
+          />
         </div>
       </header>
 
@@ -209,10 +158,6 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
           </p>
         </div>
 
-        {loading ? <p className="small px-5">Loading chart...</p> : null}
-        {errorMessage ? (
-          <p className="small px-5 text-destructive">{errorMessage}</p>
-        ) : null}
         {chartData.length === 0 ? (
           <div className="px-5 pb-5">
             <EmptyState message="No performance data available yet." />
@@ -229,104 +174,82 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
           <p className="small">
             {selectedAccountName} · {data.range} range
           </p>
-          {loading ? <p className="small">Loading positions...</p> : null}
           {data.positions.length === 0 ? (
             <EmptyState message="No open positions for this account and range." />
           ) : (
-            <DataTable
-              columns={[
-                {
-                  key: 'asset',
-                  header: 'Asset',
-                  headerClassName: 'w-[36%] min-w-[260px]',
-                  cellClassName: 'w-[36%] min-w-[260px]',
-                  sortValue: (row: OverviewPositionRow) => row.name,
-                  render: (row: OverviewPositionRow) => (
-                    <div className="leading-tight">
-                      <div className="font-semibold text-foreground">
-                        {row.name}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        {row.symbol}
-                      </div>
-                    </div>
-                  ),
-                },
-                {
-                  key: 'avg-total',
-                  header: 'Avg Buy / Total',
-                  sortValue: (row: OverviewPositionRow) => row.avgBuyTotalEur,
-                  render: (row: OverviewPositionRow) =>
-                    row.avgBuyTotalEur === null ? (
-                      '-'
-                    ) : (
-                      <span className="sb-sensitive-value">
-                        {formatMoney(row.avgBuyTotalEur)}
-                      </span>
-                    ),
-                },
-                {
-                  key: 'cur-total',
-                  header: 'Current / Total',
-                  sortValue: (row: OverviewPositionRow) => row.currentTotalEur,
-                  render: (row: OverviewPositionRow) => (
-                    <span className="sb-sensitive-value">
-                      {formatMoney(row.currentTotalEur)}
-                    </span>
-                  ),
-                },
-                {
-                  key: 'pnl',
-                  header: 'Unrealized P/L',
-                  sortValue: (row: OverviewPositionRow) =>
-                    row.periodPnlValueEur,
-                  render: (row: OverviewPositionRow) => (
-                    <span
-                      className={
-                        row.periodPnlValueEur >= 0
-                          ? 'text-[hsl(var(--success))]'
-                          : 'text-destructive'
-                      }
-                    >
-                      {formatSignedPercent(row.periodPnlPct)} (
-                      <span className="sb-sensitive-value">
-                        {formatSignedMoney(row.periodPnlValueEur)}
-                      </span>
-                      )
-                    </span>
-                  ),
-                },
-                {
-                  key: 'last-7d',
-                  header: 'Range trend',
-                  headerClassName:
-                    'w-[170px] min-w-[170px] text-right sm:w-[225px] sm:min-w-[225px] [&_button]:ml-auto',
-                  cellClassName:
-                    'w-[170px] min-w-[170px] text-right sm:w-[225px] sm:min-w-[225px]',
-                  sortValue: (row: OverviewPositionRow) =>
-                    row.rangeIndex[row.rangeIndex.length - 1] ?? null,
-                  render: (row: OverviewPositionRow) =>
-                    row.rangeIndex.length === 0 ? (
-                      <span className="text-xs text-muted-foreground">
-                        No data
-                      </span>
-                    ) : (
-                      <div className="ml-auto w-[170px] sm:w-[225px]">
-                        <Sparkline
-                          data={row.rangeIndex.map((value) => ({ value }))}
-                          width="100%"
-                          height={38}
-                        />
-                      </div>
-                    ),
-                },
-              ]}
-              rows={data.positions}
-              rowKey={(row) => row.assetId}
-            />
+            <OverviewPositionsTable rows={data.positions} />
           )}
         </Card>
       ) : null}
     </div>
+  );
+}
+
+function FilterGroup({
+  label,
+  ariaLabel,
+  align,
+  items,
+}: {
+  label: string;
+  ariaLabel: string;
+  align: 'start' | 'end';
+  items: Array<{ href: string; label: string; active: boolean }>;
+}) {
+  return (
+    <div className={cn('space-y-2', align === 'start' && 'xl:flex-1', align === 'end' && 'xl:min-w-[320px]')}>
+      <p className={cn('text-[11px] font-medium uppercase tracking-[0.13em] text-muted-foreground', align === 'end' && 'xl:text-right')}>
+        {label}
+      </p>
+      <div
+        className={cn('flex flex-wrap gap-2', align === 'end' && 'xl:justify-end')}
+        role="tablist"
+        aria-label={ariaLabel}
+      >
+        {items.map((item) => (
+          <Link
+            key={item.href}
+            href={item.href}
+            scroll={false}
+            prefetch={false}
+            className={cn(
+              filterButtonBase,
+              item.active && 'bg-muted text-foreground',
+            )}
+            aria-current={item.active ? 'page' : undefined}
+          >
+            {item.label}
+          </Link>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function buildOverviewHref(range: OverviewRange, accountId: string) {
+  const params = new URLSearchParams();
+  params.set('range', range);
+  params.set('accountId', accountId);
+  return `/?${params.toString()}`;
+}
+
+function ChartSkeleton({ height }: { height: number }) {
+  return (
+    <div className="w-full px-5 pb-5">
+      <div
+        className="animate-pulse rounded-lg border border-border/50 bg-muted/30"
+        style={{ height }}
+        aria-hidden="true"
+      />
+    </div>
+  );
+}
+
+function SparklineSkeleton() {
+  return (
+    <div
+      className="h-[38px] w-full animate-pulse rounded-md bg-muted/30"
+      aria-hidden="true"
+    />
   );
 }

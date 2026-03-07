@@ -1,5 +1,6 @@
 'use client';
 
+import { Moon, Sun } from 'lucide-react';
 import { cn } from '../../lib/utils';
 
 type ThemeMode = 'dark' | 'light';
@@ -15,47 +16,46 @@ export function ThemeSelector({
   onChange,
   compact = false,
 }: ThemeSelectorProps) {
-  if (compact) {
-    return (
-      <select
-        className="h-9 rounded-md border border-border bg-background px-3 text-sm text-foreground"
-        value={value}
-        onChange={(event) => onChange(event.target.value as ThemeMode)}
-        aria-label="Theme mode"
-      >
-        <option value="dark">Dark</option>
-        <option value="light">Light</option>
-      </select>
-    );
-  }
+  const isLight = value === 'light';
 
   return (
-    <fieldset className="flex gap-2" aria-label="Theme mode">
-      <legend className="sr-only">Theme mode</legend>
-      <button
-        type="button"
-        className={cn(
-          'rounded-md border border-border px-3 py-1.5 text-sm transition-colors',
-          value === 'dark'
-            ? 'bg-primary text-primary-foreground'
-            : 'bg-background text-muted-foreground hover:bg-muted hover:text-foreground',
-        )}
-        onClick={() => onChange('dark')}
+    <button
+      type="button"
+      aria-label={`Switch to ${isLight ? 'dark' : 'light'} mode`}
+      aria-pressed={isLight}
+      title={`Switch to ${isLight ? 'dark' : 'light'} mode`}
+      className={cn(
+        'group relative inline-flex shrink-0 items-center justify-center overflow-hidden rounded-full border border-border bg-background text-foreground shadow-sm transition-[transform,colors,box-shadow] duration-300 ease-out hover:bg-muted focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+        'active:scale-95',
+        compact ? 'h-9 w-9' : 'h-10 w-10',
+      )}
+      onClick={() => onChange(isLight ? 'dark' : 'light')}
+    >
+      <span className="sr-only">
+        Theme mode is {value}. Activate to switch to {isLight ? 'dark' : 'light'}
+        .
+      </span>
+      <span
+        aria-hidden="true"
+        className="relative h-4 w-4"
       >
-        Dark
-      </button>
-      <button
-        type="button"
-        className={cn(
-          'rounded-md border border-border px-3 py-1.5 text-sm transition-colors',
-          value === 'light'
-            ? 'bg-primary text-primary-foreground'
-            : 'bg-background text-muted-foreground hover:bg-muted hover:text-foreground',
-        )}
-        onClick={() => onChange('light')}
-      >
-        Light
-      </button>
-    </fieldset>
+        <Sun
+          className={cn(
+            'absolute inset-0 h-4 w-4 transition-all duration-300 ease-out',
+            isLight
+              ? 'rotate-0 scale-100 opacity-100'
+              : 'rotate-90 scale-50 opacity-0',
+          )}
+        />
+        <Moon
+          className={cn(
+            'absolute inset-0 h-4 w-4 transition-all duration-300 ease-out',
+            isLight
+              ? '-rotate-90 scale-50 opacity-0'
+              : 'rotate-0 scale-100 opacity-100',
+          )}
+        />
+      </span>
+    </button>
   );
 }

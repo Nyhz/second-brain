@@ -4,9 +4,7 @@ import { cookies } from 'next/headers';
 import Script from 'next/script';
 import type { ReactNode } from 'react';
 import { LayoutShell } from '../components/layout-shell';
-import { SensitiveModeProvider } from '../components/sensitive-mode-provider';
-import { ThemeProvider } from '../components/theme-provider';
-import { loadAccountsData } from '../lib/data/accounts-data';
+import { loadServerAccountsData } from '../lib/data/server-data';
 
 const themeBootScript = `(() => {
   try {
@@ -23,8 +21,14 @@ const themeBootScript = `(() => {
     document.documentElement.setAttribute('data-theme', 'dark');
   }
   try {
-    const raw = localStorage.getItem('sb-sensitive-hidden');
-    const mode = raw === '1' ? 'hidden' : 'visible';
+    const rawStorage = localStorage.getItem('sb-sensitive-hidden');
+    const rawCookie =
+      document.cookie
+        .split('; ')
+        .find((entry) => entry.startsWith('sb-sensitive-hidden='))
+        ?.split('=')[1] ?? null;
+    const mode =
+      rawStorage === '1' || rawCookie === '1' ? 'hidden' : 'visible';
     document.documentElement.setAttribute('data-sensitive', mode);
   } catch {
     document.documentElement.setAttribute('data-sensitive', 'visible');
@@ -45,8 +49,10 @@ export default async function RootLayout({
 }) {
   const cookieStore = await cookies();
   const themeCookie = cookieStore.get('sb-theme-mode')?.value;
+  const sensitiveCookie = cookieStore.get('sb-sensitive-hidden')?.value;
   const initialTheme = themeCookie === 'light' ? 'light' : 'dark';
-  const accountsData = await loadAccountsData().catch(() => ({
+  const initialSensitiveHidden = sensitiveCookie === '1';
+  const accountsData = await loadServerAccountsData().catch(() => ({
     rows: [],
   }));
 
@@ -54,20 +60,20 @@ export default async function RootLayout({
     <html
       lang="en"
       data-theme={initialTheme}
-      data-sensitive="visible"
+      data-sensitive={initialSensitiveHidden ? 'hidden' : 'visible'}
       suppressHydrationWarning
     >
       <body>
         <Script id="finances-theme-boot" strategy="beforeInteractive">
           {themeBootScript}
         </Script>
-        <ThemeProvider>
-          <SensitiveModeProvider>
-            <LayoutShell initialAccounts={accountsData.rows}>
-              {children}
-            </LayoutShell>
-          </SensitiveModeProvider>
-        </ThemeProvider>
+        <LayoutShell
+          initialAccounts={accountsData.rows}
+          initialSensitiveHidden={initialSensitiveHidden}
+          initialTheme={initialTheme}
+        >
+          {children}
+        </LayoutShell>
       </body>
     </html>
   );

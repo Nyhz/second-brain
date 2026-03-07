@@ -1,43 +1,10 @@
-'use client';
-
 import type { Account } from '@second-brain/types';
-import { usePathname } from 'next/navigation';
 import type { ReactNode } from 'react';
-import { useMemo } from 'react';
 import { buildAccountSlugMaps } from '../lib/account-slugs';
-import { useSensitiveMode } from './sensitive-mode-provider';
-import { useThemeMode } from './theme-provider';
+import { LayoutControls } from './layout-controls';
 import { AppShell } from './ui/app-shell';
-import { SensitiveToggle } from './ui/sensitive-toggle';
 import { type NavGroup, type NavItem, SideNav } from './ui/side-nav';
-import { ThemeSelector } from './ui/theme-selector';
 import { TopNav } from './ui/top-nav';
-
-const configuredBasePath = process.env.NEXT_PUBLIC_BASE_PATH ?? '';
-const normalizedBasePath = (() => {
-  if (!configuredBasePath || configuredBasePath === '/') {
-    return '';
-  }
-  const withLeadingSlash = configuredBasePath.startsWith('/')
-    ? configuredBasePath
-    : `/${configuredBasePath}`;
-  return withLeadingSlash.endsWith('/')
-    ? withLeadingSlash.slice(0, -1)
-    : withLeadingSlash;
-})();
-
-const stripBasePath = (path: string) => {
-  if (!normalizedBasePath) {
-    return path || '/';
-  }
-  if (path === normalizedBasePath) {
-    return '/';
-  }
-  if (path.startsWith(`${normalizedBasePath}/`)) {
-    return path.slice(normalizedBasePath.length);
-  }
-  return path || '/';
-};
 
 const navItems: NavItem[] = [
   { href: '/', label: 'Overview' },
@@ -50,53 +17,37 @@ const navItems: NavItem[] = [
 type LayoutShellProps = {
   children: ReactNode;
   initialAccounts: Account[];
+  initialSensitiveHidden: boolean;
+  initialTheme: 'dark' | 'light';
 };
 
-export function LayoutShell({ children, initialAccounts }: LayoutShellProps) {
-  const pathname = usePathname();
-  const appPathname = useMemo(() => stripBasePath(pathname || '/'), [pathname]);
-  const { mode, setMode } = useThemeMode();
-  const { isSensitiveHidden, setSensitiveHidden } = useSensitiveMode();
-  const accountRows = initialAccounts;
-  const accountSlugMaps = useMemo(
-    () => buildAccountSlugMaps(accountRows),
-    [accountRows],
-  );
-
-  const accountChildItems = useMemo(() => {
-    return accountRows.map((account) => {
-      const slug = accountSlugMaps.slugsById.get(account.id) ?? account.id;
-      const href = `/accounts/${encodeURIComponent(slug)}`;
-      const active = appPathname === href || appPathname.startsWith(`${href}/`);
-      return {
-        href,
-        label: account.name,
-        active,
-      };
-    });
-  }, [accountRows, accountSlugMaps, appPathname]);
-
-  const activeItems = navItems.map((item) => {
-    const nextItem: NavItem = {
-      ...item,
-      active:
-        item.href === '/'
-          ? appPathname === '/'
-          : appPathname.startsWith(item.href),
+export function LayoutShell({
+  children,
+  initialAccounts,
+  initialSensitiveHidden,
+  initialTheme,
+}: LayoutShellProps) {
+  const accountSlugMaps = buildAccountSlugMaps(initialAccounts);
+  const accountChildItems: NavItem[] = initialAccounts.map((account) => {
+    const slug = accountSlugMaps.slugsById.get(account.id) ?? account.id;
+    return {
+      href: `/accounts/${encodeURIComponent(slug)}`,
+      label: account.name,
     };
-    if (item.href === '/accounts') {
-      nextItem.children = accountChildItems;
-    }
-    return nextItem;
   });
+  const shellItems = navItems.map((item) =>
+    item.href === '/accounts'
+      ? { ...item, children: accountChildItems }
+      : item,
+  );
   const navGroups: NavGroup[] = [
     {
       label: 'Overview',
-      items: activeItems.slice(0, 1),
+      items: shellItems.slice(0, 1),
     },
     {
       label: 'Operations',
-      items: activeItems.slice(1),
+      items: shellItems.slice(1),
     },
   ];
   const portalHref = process.env.NEXT_PUBLIC_PORTAL_URL ?? '/';
@@ -116,18 +67,14 @@ export function LayoutShell({ children, initialAccounts }: LayoutShellProps) {
             </a>
           }
           right={
-            <div className="flex items-center gap-2">
-              <SensitiveToggle
-                value={isSensitiveHidden}
-                onChange={setSensitiveHidden}
-                compact
-              />
-              <ThemeSelector value={mode} onChange={setMode} compact />
-            </div>
+            <LayoutControls
+              initialSensitiveHidden={initialSensitiveHidden}
+              initialTheme={initialTheme}
+            />
           }
         />
       }
-      sideNav={<SideNav groups={navGroups} items={activeItems} />}
+      sideNav={<SideNav groups={navGroups} items={shellItems} />}
     >
       {children}
     </AppShell>

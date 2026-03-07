@@ -1,21 +1,37 @@
 'use client';
 
+import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import type {
-  OverviewPositionRow,
-  OverviewRange,
-  OverviewState,
-} from '../../../lib/dashboard-types';
+import type { OverviewRange, OverviewState } from '../../../lib/dashboard-types';
 import { loadOverview } from '../../../lib/data/overview-data';
+import { accountTypeLabel } from '../../../lib/display';
 import { getApiErrorMessage } from '../../../lib/errors';
 import { formatDateTime, formatMoney } from '../../../lib/format';
 import { cn } from '../../../lib/utils';
 import { Button } from '../../ui/button';
 import { Card } from '../../ui/card';
-import { AreaPerformanceChart } from '../../ui/charts/area-performance-chart';
-import { DataTable } from '../../ui/data-table';
 import { KpiCard } from '../../ui/kpi-card';
 import { EmptyState, ErrorState, LoadingSkeleton } from '../../ui/states';
+
+const AccountProfilePerformanceChart = dynamic(
+  () =>
+    import('./account-profile-performance-chart').then((module) => ({
+      default: module.AccountProfilePerformanceChart,
+    })),
+  {
+    loading: () => <LoadingSkeleton lines={6} />,
+  },
+);
+
+const AccountProfilePositionsTable = dynamic(
+  () =>
+    import('./account-profile-positions-table').then((module) => ({
+      default: module.AccountProfilePositionsTable,
+    })),
+  {
+    loading: () => <LoadingSkeleton lines={7} />,
+  },
+);
 
 const RANGES: OverviewRange[] = ['1W', '1M', 'YTD', '1Y', 'MAX'];
 
@@ -27,9 +43,6 @@ const formatSignedMoney = (value: number) => {
   return `${value >= 0 ? '+' : '-'}${amount}`;
 };
 
-const toLabel = (value: string) =>
-  value.replace(/_/g, ' ').replace(/\b\w/g, (char) => char.toUpperCase());
-
 const labelForPoint = (iso: string, range: OverviewRange) => {
   const date = new Date(iso);
   if (Number.isNaN(date.valueOf())) return iso;
@@ -37,22 +50,6 @@ const labelForPoint = (iso: string, range: OverviewRange) => {
     return date.toISOString().slice(5, 10);
   }
   return date.toISOString().slice(0, 10);
-};
-
-const formatOverviewQuantity = (row: OverviewPositionRow) => {
-  if (row.assetType === 'crypto') {
-    return row.quantity.toFixed(4);
-  }
-  return row.quantity.toFixed(0);
-};
-
-const accountTypeLabel = (accountType: string) => {
-  if (accountType === 'brokerage') return 'Broker';
-  if (accountType === 'crypto_exchange') return 'Exchange';
-  if (accountType === 'investment_platform') return 'Investment Fund Account';
-  if (accountType === 'retirement_plan') return 'Retirement Plan';
-  if (accountType === 'savings') return 'Savings';
-  return toLabel(accountType);
 };
 
 type AccountProfileFeatureProps = {
@@ -226,7 +223,7 @@ export function AccountProfileFeature({
           <EmptyState message="No performance data available yet." />
         ) : (
           <div className="sb-sensitive-chart">
-            <AreaPerformanceChart data={chartData} baselineValue={100} />
+            <AccountProfilePerformanceChart data={chartData} />
           </div>
         )}
       </Card>
@@ -269,83 +266,7 @@ export function AccountProfileFeature({
         {data.positions.length === 0 ? (
           <EmptyState message="No open positions for this account." />
         ) : (
-          <DataTable
-            columns={[
-              {
-                key: 'asset',
-                header: 'Asset',
-                sortValue: (row: OverviewPositionRow) => row.name,
-                render: (row: OverviewPositionRow) => (
-                  <div className="leading-tight">
-                    <div className="font-semibold text-foreground">
-                      {row.name}
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      {row.symbol}
-                    </div>
-                  </div>
-                ),
-              },
-              {
-                key: 'type',
-                header: 'Type',
-                sortValue: (row: OverviewPositionRow) => toLabel(row.assetType),
-                render: (row: OverviewPositionRow) => toLabel(row.assetType),
-              },
-              {
-                key: 'qty',
-                header: 'Quantity',
-                sortValue: (row: OverviewPositionRow) => row.quantity,
-                render: (row: OverviewPositionRow) =>
-                  formatOverviewQuantity(row),
-              },
-              {
-                key: 'avg-total',
-                header: 'Avg Buy / Total',
-                sortValue: (row: OverviewPositionRow) => row.avgBuyTotalEur,
-                render: (row: OverviewPositionRow) =>
-                  row.avgBuyTotalEur === null ? (
-                    '-'
-                  ) : (
-                    <span className="sb-sensitive-value">
-                      {formatMoney(row.avgBuyTotalEur)}
-                    </span>
-                  ),
-              },
-              {
-                key: 'current',
-                header: 'Current / Total',
-                sortValue: (row: OverviewPositionRow) => row.currentTotalEur,
-                render: (row: OverviewPositionRow) => (
-                  <span className="sb-sensitive-value">
-                    {formatMoney(row.currentTotalEur)}
-                  </span>
-                ),
-              },
-              {
-                key: 'pnl',
-                header: 'Unrealized P/L',
-                sortValue: (row: OverviewPositionRow) => row.periodPnlValueEur,
-                render: (row: OverviewPositionRow) => (
-                  <span
-                    className={
-                      row.periodPnlValueEur >= 0
-                        ? 'text-[hsl(var(--success))]'
-                        : 'text-destructive'
-                    }
-                  >
-                    {formatSignedPercent(row.periodPnlPct)} (
-                    <span className="sb-sensitive-value">
-                      {formatSignedMoney(row.periodPnlValueEur)}
-                    </span>
-                    )
-                  </span>
-                ),
-              },
-            ]}
-            rows={data.positions}
-            rowKey={(row) => row.assetId}
-          />
+          <AccountProfilePositionsTable rows={data.positions} />
         )}
       </Card>
     </div>

@@ -4,8 +4,10 @@ import {
   getAccountSlugById,
   resolveAccountIdFromPathSegment,
 } from '../../../lib/account-slugs';
-import { loadAccountsData } from '../../../lib/data/accounts-data';
-import { loadOverview } from '../../../lib/data/overview-data';
+import {
+  loadServerAccountsData,
+  loadServerOverview,
+} from '../../../lib/data/server-data';
 
 export default async function AccountProfilePage({
   params,
@@ -13,7 +15,7 @@ export default async function AccountProfilePage({
   params: Promise<{ accountId: string }>;
 }) {
   const accountPathSegment = decodeURIComponent((await params).accountId);
-  const accountsData = await loadAccountsData();
+  const accountsData = await loadServerAccountsData();
   const accountId = resolveAccountIdFromPathSegment(
     accountPathSegment,
     accountsData.rows,
@@ -28,7 +30,7 @@ export default async function AccountProfilePage({
     redirect(`/accounts/${encodeURIComponent(canonicalSlug)}`);
   }
 
-  const initialData = await loadOverview('1M', accountId).catch(
+  const initialData = await loadServerOverview('1M', accountId).catch(
     () => undefined,
   );
   if (initialData) {

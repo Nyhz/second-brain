@@ -5,7 +5,6 @@ import {
   createContext,
   useCallback,
   useContext,
-  useEffect,
   useMemo,
   useState,
 } from 'react';
@@ -20,6 +19,7 @@ const SensitiveModeContext = createContext<SensitiveModeContextValue | null>(
 );
 
 const KEY = 'sb-sensitive-hidden';
+const ONE_YEAR_SECONDS = 60 * 60 * 24 * 365;
 
 const applySensitiveAttribute = (hidden: boolean) => {
   document.documentElement.setAttribute(
@@ -28,20 +28,25 @@ const applySensitiveAttribute = (hidden: boolean) => {
   );
 };
 
-export function SensitiveModeProvider({ children }: { children: ReactNode }) {
-  const [isSensitiveHidden, setIsSensitiveHiddenState] = useState(false);
+const persistSensitiveMode = (hidden: boolean) => {
+  window.localStorage.setItem(KEY, hidden ? '1' : '0');
+  document.cookie = `${KEY}=${hidden ? '1' : '0'}; Path=/; Max-Age=${ONE_YEAR_SECONDS}; SameSite=Lax`;
+};
 
-  useEffect(() => {
-    const raw = window.localStorage.getItem(KEY);
-    const hidden = raw === '1';
-    setIsSensitiveHiddenState(hidden);
-    applySensitiveAttribute(hidden);
-  }, []);
+export function SensitiveModeProvider({
+  children,
+  initialHidden,
+}: {
+  children: ReactNode;
+  initialHidden: boolean;
+}) {
+  const [isSensitiveHidden, setIsSensitiveHiddenState] =
+    useState(initialHidden);
 
   const setSensitiveHidden = useCallback((hidden: boolean) => {
     setIsSensitiveHiddenState(hidden);
     applySensitiveAttribute(hidden);
-    window.localStorage.setItem(KEY, hidden ? '1' : '0');
+    persistSensitiveMode(hidden);
   }, []);
 
   const value = useMemo(

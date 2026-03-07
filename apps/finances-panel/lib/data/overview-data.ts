@@ -30,6 +30,9 @@ export const loadOverview = async (
   };
 };
 
-export const getOverviewPageData = async () => {
-  return loadOverview(DEFAULT_RANGE, 'all');
+export const getOverviewPageData = async (
+  range: OverviewRange = DEFAULT_RANGE,
+  accountId = 'all',
+) => {
+  return loadOverview(range, accountId);
 };
