@@ -13,15 +13,12 @@ const persistThemeMode = (mode: ThemeMode) => {
   document.cookie = `${KEY}=${mode}; Path=/; Max-Age=${ONE_YEAR_SECONDS}; SameSite=Lax`;
 };
 
-export function ThemeSwitcher() {
-  const [mode, setMode] = useState<ThemeMode>('dark');
+export function ThemeSwitcher({ initialMode }: { initialMode: ThemeMode }) {
+  const [mode, setMode] = useState<ThemeMode>(initialMode);
 
   useEffect(() => {
-    const raw = window.localStorage.getItem(KEY);
-    const next: ThemeMode = raw === 'light' ? 'light' : 'dark';
-    setMode(next);
-    document.documentElement.setAttribute('data-theme', next);
-  }, []);
+    document.documentElement.setAttribute('data-theme', mode);
+  }, [mode]);
 
   const onChange = (nextMode: ThemeMode) => {
     setMode(nextMode);

@@ -1,3 +1,4 @@
+import { cookies } from 'next/headers';
 import type { ServiceStatusHistoryResponse } from '@second-brain/types';
 import type { LucideIcon } from 'lucide-react';
 import {
@@ -109,6 +110,9 @@ const loadHistory = async (): Promise<{
 };
 
 export default async function HomePage() {
+  const cookieStore = await cookies();
+  const themeCookie = cookieStore.get('sb-theme-mode')?.value;
+  const initialTheme = themeCookie === 'light' ? 'light' : 'dark';
   const { history, errorMessage } = await loadHistory();
   const primaryModuleCandidate =
     appModules.find((module) => module.status === 'live') ?? appModules[0];
@@ -127,7 +131,7 @@ export default async function HomePage() {
               <h1>Operations Control Surface</h1>
               <p>No modules configured yet for this workspace.</p>
             </div>
-            <ThemeSwitcher />
+            <ThemeSwitcher initialMode={initialTheme} />
           </div>
         </section>
         <OperationsStatus initialHistory={history} errorMessage={errorMessage} />
@@ -149,7 +153,7 @@ export default async function HomePage() {
               your local platform.
             </p>
           </div>
-          <ThemeSwitcher />
+          <ThemeSwitcher initialMode={initialTheme} />
         </div>
         <div className="hero-chips">
           <span className="hero-chip">Local-first</span>
