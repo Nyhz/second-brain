@@ -2,6 +2,7 @@ import {
   accountCashMovements,
   accounts,
   and,
+  auditEvents,
   assetPositions,
   assetTransactions,
   assets,
@@ -25,8 +26,10 @@ import {
   type DegiroAccountStatementAnalyzeResult,
   type DegiroAccountStatementImportResult,
   type DegiroImportResult,
+  type FinanceAuditEvent,
   type FinancesOverviewResponse,
   type OverviewRange,
+  type TaxYearlySummary,
   type UnifiedTransactionRow,
   binanceImportRequestSchema,
   cobasImportRequestSchema,
@@ -44,6 +47,7 @@ import {
 import type { Elysia } from 'elysia';
 import { withTimedDb } from '../../lib/db-timed';
 import { ApiHttpError } from '../../lib/errors';
+import { renderPlainTextPdf } from '../../lib/simple-pdf';
 import { parseBinanceTransactionsCsv } from './binance-import';
 import { parseCobasTransactionsCsv } from './cobas-import';
 import {
@@ -71,6 +75,23 @@ const toNullableNumber = (value: unknown) => {
     return null;
   }
   return Number(value);
+};
+
+const toNullableDate = (value: unknown) => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  if (value instanceof Date) {
+    return value.toISOString().slice(0, 10);
+  }
+  return String(value).slice(0, 10);
+};
+
+const normalizeAuditJson = (value: unknown): Record<string, unknown> | null => {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
 };
 
 const requiredIsinForType = new Set<AssetType>([
@@ -102,6 +123,85 @@ const convertToEur = (
     );
   }
   return amount * fxRateToEur;
+};
+
+const computeTransactionEconomics = (
+  input: Pick<
+    CreateAssetTransactionInput,
+    | 'transactionType'
+    | 'quantity'
+    | 'unitPrice'
+    | 'tradeCurrency'
+    | 'fxRateToEur'
+    | 'feesAmount'
+    | 'feesCurrency'
+    | 'dividendNet'
+  >,
+) => {
+  const tradeCurrency = normalizeCurrency(input.tradeCurrency);
+  const feesCurrency = normalizeCurrency(
+    input.feesCurrency ?? input.tradeCurrency,
+  );
+  const tradeGrossAmount =
+    input.transactionType === 'buy' || input.transactionType === 'sell'
+      ? round6(input.quantity * input.unitPrice)
+      : 0;
+  const tradeGrossAmountEur =
+    input.transactionType === 'buy' || input.transactionType === 'sell'
+      ? round2(
+          convertToEur(tradeGrossAmount, tradeCurrency, input.fxRateToEur ?? null),
+        )
+      : 0;
+  const feesAmountEur = round2(
+    convertToEur(input.feesAmount, feesCurrency, input.fxRateToEur ?? null),
+  );
+
+  if (input.transactionType === 'buy') {
+    return {
+      tradeCurrency,
+      feesCurrency,
+      tradeGrossAmount,
+      tradeGrossAmountEur,
+      feesAmountEur,
+      netAmountEur: round2(tradeGrossAmountEur + feesAmountEur),
+      cashImpactEur: round2(-(tradeGrossAmountEur + feesAmountEur)),
+    };
+  }
+  if (input.transactionType === 'sell') {
+    return {
+      tradeCurrency,
+      feesCurrency,
+      tradeGrossAmount,
+      tradeGrossAmountEur,
+      feesAmountEur,
+      netAmountEur: round2(Math.max(0, tradeGrossAmountEur - feesAmountEur)),
+      cashImpactEur: round2(tradeGrossAmountEur - feesAmountEur),
+    };
+  }
+  if (input.transactionType === 'fee') {
+    return {
+      tradeCurrency,
+      feesCurrency,
+      tradeGrossAmount: 0,
+      tradeGrossAmountEur: 0,
+      feesAmountEur,
+      netAmountEur: round2(feesAmountEur),
+      cashImpactEur: round2(-feesAmountEur),
+    };
+  }
+
+  const dividendNetEur = round2(
+    convertToEur(input.dividendNet ?? 0, tradeCurrency, input.fxRateToEur ?? null),
+  );
+  return {
+    tradeCurrency,
+    feesCurrency,
+    tradeGrossAmount: 0,
+    tradeGrossAmountEur: 0,
+    feesAmountEur,
+    netAmountEur: dividendNetEur,
+    cashImpactEur: dividendNetEur,
+  };
 };
 
 const serializeAsset = (row: Record<string, unknown>): Asset => ({
@@ -161,15 +261,20 @@ const serializeAssetTransaction = (
   unitPrice: toNumber(row.unitPrice),
   tradeCurrency: String(row.tradeCurrency),
   fxRateToEur: toNullableNumber(row.fxRateToEur),
+  tradeGrossAmount: toNumber(row.tradeGrossAmount),
+  tradeGrossAmountEur: toNumber(row.tradeGrossAmountEur),
   cashImpactEur: toNumber(row.cashImpactEur),
   feesAmount: toNumber(row.feesAmount),
   feesCurrency:
     row.feesCurrency === null || row.feesCurrency === undefined
       ? null
       : String(row.feesCurrency),
+  feesAmountEur: toNumber(row.feesAmountEur),
+  netAmountEur: toNumber(row.netAmountEur),
   dividendGross: toNullableNumber(row.dividendGross),
   withholdingTax: toNullableNumber(row.withholdingTax),
   dividendNet: toNullableNumber(row.dividendNet),
+  settlementDate: toNullableDate(row.settlementDate),
   linkedTransactionId:
     row.linkedTransactionId === null || row.linkedTransactionId === undefined
       ? null
@@ -186,8 +291,25 @@ const serializeAssetTransaction = (
     row.source === null || row.source === undefined ? null : String(row.source),
   notes:
     row.notes === null || row.notes === undefined ? null : String(row.notes),
+  rawPayload: normalizeAuditJson(row.rawPayload),
   createdAt: toIso(row.createdAt),
   updatedAt: toIso(row.updatedAt),
+});
+
+const serializeFinanceAuditEvent = (
+  row: Record<string, unknown>,
+): FinanceAuditEvent => ({
+  id: String(row.id),
+  entityType: String(row.entityType),
+  entityId: String(row.entityId),
+  action: String(row.action),
+  actorType: String(row.actorType),
+  source: String(row.source),
+  summary: String(row.summary),
+  previousJson: normalizeAuditJson(row.previousJson),
+  nextJson: normalizeAuditJson(row.nextJson),
+  contextJson: normalizeAuditJson(row.contextJson),
+  createdAt: toIso(row.createdAt),
 });
 
 const round2 = (value: number) => Number(value.toFixed(2));
@@ -220,6 +342,8 @@ const isInvestmentAccountType = (accountType: string | null | undefined) =>
 
 const isSavingsAccountType = (accountType: string | null | undefined) =>
   accountType === SAVINGS_ACCOUNT_TYPE;
+
+const formatReportMoney = (value: number) => value.toFixed(2);
 
 type ImportMovementTable = 'asset_transaction' | 'cash_movement';
 
@@ -279,6 +403,32 @@ const clampRangeStart = (
 
 export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
   const { db } = createDbClient(databaseUrl);
+
+  const recordAuditEvent = async (input: {
+    entityType: string;
+    entityId: string;
+    action: string;
+    actorType: 'user' | 'system';
+    source: string;
+    summary: string;
+    previous?: Record<string, unknown> | null;
+    next?: Record<string, unknown> | null;
+    context?: Record<string, unknown> | null;
+  }) => {
+    await withTimedDb('record_audit_event', async () =>
+      db.insert(auditEvents).values({
+        entityType: input.entityType,
+        entityId: input.entityId,
+        action: input.action,
+        actorType: input.actorType,
+        source: input.source,
+        summary: input.summary,
+        previousJson: input.previous ?? null,
+        nextJson: input.next ?? null,
+        contextJson: input.context ?? null,
+      }),
+    );
+  };
 
   const listAssetViews = async (filters?: {
     type?: string;
@@ -619,14 +769,15 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       cashImpactEurOverride?: number;
       linkedTransactionId?: string | null;
       rowFingerprint?: string | null;
+      settlementDate?: string | null;
+      rawPayload?: Record<string, unknown> | null;
       source?: string | null;
       skipCashBalanceValidation?: boolean;
     },
   ) => {
-    const tradeCurrency = normalizeCurrency(input.tradeCurrency);
-    const feesCurrency = normalizeCurrency(
-      input.feesCurrency ?? input.tradeCurrency,
-    );
+    const economics = computeTransactionEconomics(input);
+    const tradeCurrency = economics.tradeCurrency;
+    const feesCurrency = economics.feesCurrency;
 
     const [accountRow] = await withTimedDb(
       'asset_tx_account_exists',
@@ -669,37 +820,14 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       );
     }
 
-    const tradedAmount = input.quantity * input.unitPrice;
-    const tradedAmountEur = convertToEur(
-      tradedAmount,
-      tradeCurrency,
-      input.fxRateToEur ?? null,
-    );
-    const feesAmountEur = convertToEur(
-      input.feesAmount,
-      feesCurrency,
-      input.fxRateToEur ?? null,
-    );
-
-    let cashImpactEur =
-      options?.cashImpactEurOverride === undefined
-        ? 0
-        : options.cashImpactEurOverride;
-    if (options?.cashImpactEurOverride === undefined) {
-      if (input.transactionType === 'buy') {
-        cashImpactEur = -(tradedAmountEur + feesAmountEur);
-      } else if (input.transactionType === 'sell') {
-        cashImpactEur = tradedAmountEur - feesAmountEur;
-      } else if (input.transactionType === 'fee') {
-        cashImpactEur = -feesAmountEur;
-      } else {
-        const dividendNet = input.dividendNet ?? 0;
-        cashImpactEur = convertToEur(
-          dividendNet,
-          tradeCurrency,
-          input.fxRateToEur ?? null,
-        );
-      }
+    let cashImpactEur = economics.cashImpactEur;
+    let netAmountEur = economics.netAmountEur;
+    if (options?.cashImpactEurOverride !== undefined) {
+      cashImpactEur = round2(options.cashImpactEurOverride);
+      netAmountEur =
+        input.transactionType === 'dividend'
+          ? round2(Math.max(0, cashImpactEur))
+          : round2(Math.abs(cashImpactEur));
     }
 
     if (input.transactionType === 'sell') {
@@ -742,9 +870,13 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
             input.fxRateToEur === undefined || input.fxRateToEur === null
               ? null
               : input.fxRateToEur.toString(),
+          tradeGrossAmount: economics.tradeGrossAmount.toString(),
+          tradeGrossAmountEur: economics.tradeGrossAmountEur.toString(),
           cashImpactEur: round2(cashImpactEur).toString(),
           feesAmount: input.feesAmount.toString(),
           feesCurrency: input.feesAmount > 0 ? feesCurrency : null,
+          feesAmountEur: economics.feesAmountEur.toString(),
+          netAmountEur: netAmountEur.toString(),
           dividendGross:
             input.dividendGross === undefined || input.dividendGross === null
               ? null
@@ -757,11 +889,13 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
             input.dividendNet === undefined || input.dividendNet === null
               ? null
               : input.dividendNet.toString(),
+          settlementDate: options?.settlementDate ?? null,
           linkedTransactionId: options?.linkedTransactionId ?? null,
           externalReference: input.externalReference ?? null,
           rowFingerprint: options?.rowFingerprint ?? null,
           source: options?.source ?? 'manual',
           notes: input.notes ?? null,
+          rawPayload: options?.rawPayload ?? null,
         })
         .returning();
     });
@@ -774,11 +908,26 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         'Failed to create asset transaction',
       );
     }
-
-    return serializeAssetTransaction({
+    const serialized = serializeAssetTransaction({
       ...(rows[0] as Record<string, unknown>),
       assetType: input.assetType,
     });
+    await recordAuditEvent({
+      entityType: 'asset_transaction',
+      entityId: String(createdId),
+      action: 'created',
+      actorType: options?.source && options.source !== 'manual' ? 'system' : 'user',
+      source: options?.source ?? 'manual',
+      summary: `Asset transaction created (${input.transactionType})`,
+      next: normalizeAuditJson(serialized),
+      context: normalizeAuditJson({
+        rowFingerprint: options?.rowFingerprint ?? null,
+        linkedTransactionId: options?.linkedTransactionId ?? null,
+        settlementDate: options?.settlementDate ?? null,
+      }),
+    });
+
+    return serialized;
   };
 
   const statementAssetRowTypes = new Set<DegiroAccountStatementRowType>([
@@ -1044,11 +1193,82 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         'Failed to create account cash movement',
       );
     }
-    return String(created.id);
+    const createdId = String(created.id);
+    await recordAuditEvent({
+      entityType: 'account_cash_movement',
+      entityId: createdId,
+      action: 'created',
+      actorType: input.source && input.source !== 'manual' ? 'system' : 'user',
+      source: input.source ?? 'manual',
+      summary: `Account cash movement created (${input.movementType})`,
+      next: normalizeAuditJson({
+        id: createdId,
+        accountId: input.accountId,
+        movementType: input.movementType,
+        occurredAt: input.occurredAt,
+        valueDate: input.valueDate,
+        nativeAmount: input.nativeAmount,
+        currency: normalizeCurrency(input.currency),
+        fxRateToEur: input.fxRateToEur,
+        cashImpactEur: round2(input.cashImpactEur),
+        externalReference: input.externalReference ?? null,
+        rowFingerprint: input.rowFingerprint ?? null,
+        description: input.description ?? null,
+        affectsCashBalance: input.affectsCashBalance,
+      }),
+      context: normalizeAuditJson({
+        rawPayload: input.rawPayload ?? null,
+      }),
+    });
+    return createdId;
   };
 
   app.get('/finances/accounts', async () => {
     return listAccountsWithCash();
+  });
+
+  app.get('/finances/audit-events', async ({ query }) => {
+    const entityType = query.entityType as string | undefined;
+    const entityId = query.entityId as string | undefined;
+    const limitRaw = Number(query.limit ?? 50);
+    if (!Number.isFinite(limitRaw)) {
+      throw new ApiHttpError(400, 'VALIDATION_ERROR', 'limit must be a number');
+    }
+    const limit = Math.max(1, Math.min(200, Math.floor(limitRaw || 50)));
+
+    const filters: Array<ReturnType<typeof eq>> = [];
+    if (entityType) {
+      filters.push(eq(auditEvents.entityType, entityType));
+    }
+    if (entityId) {
+      if (!UUID_RE.test(entityId)) {
+        throw new ApiHttpError(400, 'VALIDATION_ERROR', 'entityId must be a UUID');
+      }
+      filters.push(eq(auditEvents.entityId, entityId));
+    }
+
+    const rows = await withTimedDb('list_audit_events', async () => {
+      const queryBuilder = db.select().from(auditEvents);
+      if (filters.length === 0) {
+        return queryBuilder.orderBy(desc(auditEvents.createdAt)).limit(limit);
+      }
+      if (filters.length === 1) {
+        return queryBuilder
+          .where(filters[0] as ReturnType<typeof eq>)
+          .orderBy(desc(auditEvents.createdAt))
+          .limit(limit);
+      }
+      return queryBuilder
+        .where(and(...filters))
+        .orderBy(desc(auditEvents.createdAt))
+        .limit(limit);
+    });
+
+    return {
+      rows: rows.map((row) =>
+        serializeFinanceAuditEvent(row as Record<string, unknown>),
+      ),
+    };
   });
 
   app.post('/finances/accounts', async ({ body, set }) => {
@@ -1067,23 +1287,38 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       ? parsed.data.openingBalanceEur
       : 0;
 
-    await withTimedDb('create_account', async () => {
+    const createdRows = await withTimedDb('create_account', async () => {
       return db.insert(accounts).values({
         name: parsed.data.name,
         currency: 'EUR',
         baseCurrency: 'EUR',
         openingBalanceEur: openingBalanceEur.toString(),
         accountType,
-      });
+      }).returning({ id: accounts.id });
     });
 
+    const createdId = String(createdRows[0]?.id ?? '');
+
     const rows = await listAccountsWithCash();
-    const created = rows.find((row) => row.name === parsed.data.name);
+    const created = rows.find((row) => row.id === createdId);
+    if (created) {
+      await recordAuditEvent({
+        entityType: 'account',
+        entityId: created.id,
+        action: 'created',
+        actorType: 'user',
+        source: 'manual',
+        summary: `Account created (${created.accountType})`,
+        next: normalizeAuditJson(created),
+      });
+    }
     set.status = 201;
     return created ?? rows[0];
   });
 
   app.delete('/finances/accounts/:id', async ({ params, set }) => {
+    const previousAccounts = await listAccountsWithCash();
+    const previous = previousAccounts.find((row) => row.id === params.id) ?? null;
     const rows = await withTimedDb('delete_account', async () => {
       return db
         .delete(accounts)
@@ -1096,6 +1331,17 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         'ACCOUNT_NOT_FOUND',
         'Account does not exist',
       );
+    }
+    if (previous) {
+      await recordAuditEvent({
+        entityType: 'account',
+        entityId: previous.id,
+        action: 'deleted',
+        actorType: 'user',
+        source: 'manual',
+        summary: `Account deleted (${previous.accountType})`,
+        previous: normalizeAuditJson(previous),
+      });
     }
     set.status = 204;
     return;
@@ -1214,15 +1460,20 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
             at.quantity as quantity,
             at.unit_price as "unitPrice",
             case
-              when at.transaction_type = 'buy' then -(at.quantity * at.unit_price)
-              when at.transaction_type = 'sell' then (at.quantity * at.unit_price)
+              when at.transaction_type = 'buy' then -coalesce(at.trade_gross_amount, at.quantity * at.unit_price)
+              when at.transaction_type = 'sell' then coalesce(at.trade_gross_amount, at.quantity * at.unit_price)
               when at.transaction_type = 'dividend' then coalesce(at.dividend_net, 0)
               when at.transaction_type = 'fee' then -abs(coalesce(at.fees_amount, 0))
               else 0
             end::numeric as "amountNative",
+            at.trade_gross_amount as "tradeGrossAmount",
             at.trade_currency as currency,
             at.fx_rate_to_eur as "fxRateToEur",
             at.cash_impact_eur as "cashImpactEur",
+            at.fees_amount as "feesAmount",
+            at.fees_currency as "feesCurrency",
+            at.fees_amount_eur as "feesAmountEur",
+            at.net_amount_eur as "netAmountEur",
             at.linked_transaction_id as "linkedTransactionId",
             at.notes,
             at.external_reference as "externalReference",
@@ -1248,9 +1499,14 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
             null::numeric as quantity,
             null::numeric as "unitPrice",
             acm.native_amount as "amountNative",
+            null::numeric as "tradeGrossAmount",
             acm.currency,
             acm.fx_rate_to_eur as "fxRateToEur",
             acm.cash_impact_eur as "cashImpactEur",
+            null::numeric as "feesAmount",
+            null::text as "feesCurrency",
+            null::numeric as "feesAmountEur",
+            null::numeric as "netAmountEur",
             null::uuid as "linkedTransactionId",
             acm.description as notes,
             acm.external_reference as "externalReference",
@@ -1311,12 +1567,32 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
             ? null
             : Number(row.unitPrice),
         amountNative: Number(row.amountNative ?? 0),
+        tradeGrossAmount:
+          row.tradeGrossAmount === null || row.tradeGrossAmount === undefined
+            ? null
+            : Number(row.tradeGrossAmount),
         currency: String(row.currency ?? 'EUR'),
         fxRateToEur:
           row.fxRateToEur === null || row.fxRateToEur === undefined
             ? null
             : Number(row.fxRateToEur),
         cashImpactEur: Number(row.cashImpactEur ?? 0),
+        feesAmount:
+          row.feesAmount === null || row.feesAmount === undefined
+            ? null
+            : Number(row.feesAmount),
+        feesCurrency:
+          row.feesCurrency === null || row.feesCurrency === undefined
+            ? null
+            : String(row.feesCurrency),
+        feesAmountEur:
+          row.feesAmountEur === null || row.feesAmountEur === undefined
+            ? null
+            : Number(row.feesAmountEur),
+        netAmountEur:
+          row.netAmountEur === null || row.netAmountEur === undefined
+            ? null
+            : Number(row.netAmountEur),
         linkedTransactionId:
           row.linkedTransactionId === null ||
           row.linkedTransactionId === undefined
@@ -1425,6 +1701,9 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
   });
 
   app.delete('/finances/asset-transactions/:id', async ({ params, set }) => {
+    const previousRows = await withTimedDb('get_asset_transaction_for_delete', async () =>
+      db.select().from(assetTransactions).where(eq(assetTransactions.id, params.id)),
+    );
     const rows = await withTimedDb('delete_asset_transaction', async () => {
       return db
         .delete(assetTransactions)
@@ -1437,6 +1716,23 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         'ASSET_TRANSACTION_NOT_FOUND',
         'Asset transaction does not exist',
       );
+    }
+    const previous = previousRows[0];
+    if (previous) {
+      await recordAuditEvent({
+        entityType: 'asset_transaction',
+        entityId: String(previous.id),
+        action: 'deleted',
+        actorType: 'user',
+        source: String(previous.source ?? 'manual'),
+        summary: `Asset transaction deleted (${String(previous.transactionType)})`,
+        previous: normalizeAuditJson({
+          ...(previous as Record<string, unknown>),
+          tradedAt: toIso(previous.tradedAt),
+          createdAt: toIso(previous.createdAt),
+          updatedAt: toIso(previous.updatedAt),
+        }),
+      });
     }
     set.status = 204;
     return;
@@ -1703,6 +1999,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       try {
         const created = await createAssetTransactionRecord(validation.data, {
           cashImpactEurOverride: round2(parsedRow.normalized.totalEur),
+          rawPayload: normalizeAuditJson(parsedRow.raw),
           source: DEGIRO_TRANSACTIONS_SOURCE,
         });
         importedRows += 1;
@@ -2084,6 +2381,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
 
         const created = await createAssetTransactionRecord(validation.data, {
           cashImpactEurOverride: round2(cashImpactEurOverride),
+          rawPayload: normalizeAuditJson(row.raw),
           source: BINANCE_TRANSACTIONS_SOURCE,
         });
         importedRows += 1;
@@ -2476,6 +2774,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       try {
         const created = await createAssetTransactionRecord(validation.data, {
           cashImpactEurOverride: -Math.abs(row.normalized.netAmountEur),
+          rawPayload: normalizeAuditJson(row.raw),
           source: COBAS_TRANSACTIONS_SOURCE,
         });
         importedRows += 1;
@@ -3049,6 +3348,8 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
           const created = await createAssetTransactionRecord(validation.data, {
             cashImpactEurOverride: cashImpactEur,
             rowFingerprint: row.rowFingerprint,
+            settlementDate: toNullableDate(row.date),
+            rawPayload: normalizeAuditJson(row),
             source: DEGIRO_ACCOUNT_STATEMENT_SOURCE,
             skipCashBalanceValidation: true,
           });
@@ -3226,6 +3527,8 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
             cashImpactEurOverride: cashImpactEur,
             linkedTransactionId,
             rowFingerprint: row.rowFingerprint,
+            settlementDate: toNullableDate(row.date),
+            rawPayload: normalizeAuditJson(row),
             source: DEGIRO_ACCOUNT_STATEMENT_SOURCE,
             skipCashBalanceValidation: true,
           });
@@ -3449,6 +3752,11 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
           const created = await createAssetTransactionRecord(validation.data, {
             cashImpactEurOverride: netEur,
             rowFingerprint: groupFingerprint,
+            settlementDate: toNullableDate(first.date),
+            rawPayload: normalizeAuditJson({
+              rows: ordered,
+              groupFingerprint,
+            }),
             source: DEGIRO_ACCOUNT_STATEMENT_SOURCE,
             skipCashBalanceValidation: true,
           });
@@ -3759,12 +4067,7 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     },
   );
 
-  app.get('/finances/tax/yearly-summary', async ({ query }) => {
-    const yearRaw = Number(query.year ?? new Date().getUTCFullYear());
-    const year = Number.isFinite(yearRaw)
-      ? Math.max(2000, Math.min(2100, Math.trunc(yearRaw)))
-      : new Date().getUTCFullYear();
-
+  const loadTaxYearlySummary = async (year: number): Promise<TaxYearlySummary> => {
     const from = new Date(`${year}-01-01T00:00:00.000Z`);
     const to = new Date(`${year + 1}-01-01T00:00:00.000Z`);
     const fromIsoBound = from.toISOString();
@@ -3775,22 +4078,31 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         select
           at.id,
           at.account_id as "accountId",
+          acc.name as "accountName",
           at.asset_id as "assetId",
           a.name as "assetName",
           a.ticker as "assetTicker",
+          a.isin as "assetIsin",
           at.transaction_type as "transactionType",
           at.traded_at as "tradedAt",
           at.quantity,
           at.unit_price as "unitPrice",
           at.trade_currency as "tradeCurrency",
           at.fx_rate_to_eur as "fxRateToEur",
+          at.trade_gross_amount as "tradeGrossAmount",
+          at.trade_gross_amount_eur as "tradeGrossAmountEur",
           at.fees_amount as "feesAmount",
           at.fees_currency as "feesCurrency",
+          at.fees_amount_eur as "feesAmountEur",
+          at.net_amount_eur as "netAmountEur",
           at.dividend_gross as "dividendGross",
           at.withholding_tax as "withholdingTax",
-          at.dividend_net as "dividendNet"
+          at.dividend_net as "dividendNet",
+          at.external_reference as "externalReference",
+          at.source
         from finances.asset_transactions at
         inner join finances.assets a on a.id = at.asset_id
+        inner join finances.accounts acc on acc.id = at.account_id
         where at.traded_at >= ${fromIsoBound}::timestamptz
           and at.traded_at < ${toIsoBound}::timestamptz
         order by at.asset_id asc, at.traded_at asc, at.created_at asc
@@ -3800,17 +4112,8 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     type Lot = { quantity: number; unitCostEur: number };
 
     const lotsByAsset = new Map<string, Lot[]>();
-    const realizedRows: Array<{
-      transactionId: string;
-      tradedAt: string;
-      assetId: string;
-      assetTicker: string;
-      assetName: string;
-      quantitySold: number;
-      proceedsEur: number;
-      costBasisEur: number;
-      realizedGainLossEur: number;
-    }> = [];
+    const realizedRows: TaxYearlySummary['operations']['detailedRows'] = [];
+    const dividendRows: TaxYearlySummary['operations']['dividendRows'] = [];
 
     let realizedGainLossEur = 0;
     let dividendsGrossEur = 0;
@@ -3833,22 +4136,33 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       const feesCurrency = normalizeCurrency(
         String(row.feesCurrency ?? row.tradeCurrency ?? 'EUR'),
       );
+      const tradeGrossAmount = Number(row.tradeGrossAmount ?? quantity * unitPrice);
+      const tradeGrossAmountEur = Number(
+        row.tradeGrossAmountEur ??
+          convertToEur(tradeGrossAmount, tradeCurrency, fxRateToEur),
+      );
+      const feesAmountEur = Number(
+        row.feesAmountEur ?? convertToEur(feesAmount, feesCurrency, fxRateToEur),
+      );
+      const netAmountEur = Number(
+        row.netAmountEur ??
+          (transactionType === 'buy'
+            ? tradeGrossAmountEur + feesAmountEur
+            : transactionType === 'sell'
+              ? tradeGrossAmountEur - feesAmountEur
+              : transactionType === 'fee'
+                ? feesAmountEur
+                : convertToEur(
+                    Number(row.dividendNet ?? 0),
+                    tradeCurrency,
+                    fxRateToEur,
+                  )),
+      );
 
       const lots = lotsByAsset.get(assetId) ?? [];
 
       if (transactionType === 'buy') {
-        const totalGrossEur = convertToEur(
-          quantity * unitPrice,
-          tradeCurrency,
-          fxRateToEur,
-        );
-        const totalFeesEur = convertToEur(
-          feesAmount,
-          feesCurrency,
-          fxRateToEur,
-        );
-        const lotUnitCost =
-          quantity > 0 ? (totalGrossEur + totalFeesEur) / quantity : 0;
+        const lotUnitCost = quantity > 0 ? netAmountEur / quantity : 0;
         lots.push({ quantity, unitCostEur: lotUnitCost });
         lotsByAsset.set(assetId, lots);
       }
@@ -3871,18 +4185,8 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
           }
         }
 
-        const proceedsGrossEur = convertToEur(
-          quantity * unitPrice,
-          tradeCurrency,
-          fxRateToEur,
-        );
-        const proceedsFeesEur = convertToEur(
-          feesAmount,
-          feesCurrency,
-          fxRateToEur,
-        );
-        const proceedsEur = proceedsGrossEur - proceedsFeesEur;
-        const realized = proceedsEur - costBasisEur;
+        const proceedsEur = round2(netAmountEur);
+        const realized = round2(proceedsEur - costBasisEur);
         realizedGainLossEur += realized;
 
         realizedRows.push({
@@ -3891,10 +4195,25 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
           assetId,
           assetTicker: String(row.assetTicker),
           assetName: String(row.assetName),
+          assetIsin: String(row.assetIsin),
+          accountId: String(row.accountId),
+          accountName: String(row.accountName),
           quantitySold: quantity,
-          proceedsEur: round2(proceedsEur),
+          tradeCurrency,
+          fxRateToEur,
+          tradeGrossAmount: round6(tradeGrossAmount),
+          tradeGrossAmountEur: round2(tradeGrossAmountEur),
+          feesAmount: round6(feesAmount),
+          feesCurrency,
+          feesAmountEur: round2(feesAmountEur),
+          proceedsEur,
           costBasisEur: round2(costBasisEur),
-          realizedGainLossEur: round2(realized),
+          realizedGainLossEur: realized,
+          externalReference:
+            row.externalReference === null || row.externalReference === undefined
+              ? null
+              : String(row.externalReference),
+          source: row.source === null || row.source === undefined ? null : String(row.source),
         });
 
         lotsByAsset.set(assetId, lots);
@@ -3905,13 +4224,39 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
         const withholding = Number(row.withholdingTax ?? 0);
         const net = Number(row.dividendNet ?? 0);
 
-        dividendsGrossEur += convertToEur(gross, tradeCurrency, fxRateToEur);
-        dividendsWithholdingEur += convertToEur(
-          withholding,
+        const grossEur = round2(convertToEur(gross, tradeCurrency, fxRateToEur));
+        const withholdingEur = round2(
+          convertToEur(withholding, tradeCurrency, fxRateToEur),
+        );
+        const netEur = round2(convertToEur(net, tradeCurrency, fxRateToEur));
+
+        dividendsGrossEur += grossEur;
+        dividendsWithholdingEur += withholdingEur;
+        dividendsNetEur += netEur;
+
+        dividendRows.push({
+          transactionId: String(row.id),
+          tradedAt: toIso(row.tradedAt),
+          assetId,
+          assetTicker: String(row.assetTicker),
+          assetName: String(row.assetName),
+          assetIsin: String(row.assetIsin),
+          accountId: String(row.accountId),
+          accountName: String(row.accountName),
           tradeCurrency,
           fxRateToEur,
-        );
-        dividendsNetEur += convertToEur(net, tradeCurrency, fxRateToEur);
+          dividendGross: round6(gross),
+          withholdingTax: round6(withholding),
+          dividendNet: round6(net),
+          grossEur,
+          withholdingEur,
+          netEur,
+          externalReference:
+            row.externalReference === null || row.externalReference === undefined
+              ? null
+              : String(row.externalReference),
+          source: row.source === null || row.source === undefined ? null : String(row.source),
+        });
       }
     }
 
@@ -3923,9 +4268,69 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       dividendsNetEur: round2(dividendsNetEur),
       operations: {
         sells: realizedRows.length,
+        dividends: dividendRows.length,
         detailedRows: realizedRows,
+        dividendRows,
       },
     };
+  };
+
+  const buildTaxReportLines = (summary: TaxYearlySummary) => {
+    const lines = [
+      `Second Brain Hacienda Report ${summary.year}`,
+      `Generated UTC ${new Date().toISOString()}`,
+      '',
+      `Realized gain/loss EUR: ${formatReportMoney(summary.realizedGainLossEur)}`,
+      `Dividends gross EUR: ${formatReportMoney(summary.dividendsGrossEur)}`,
+      `Dividends withholding EUR: ${formatReportMoney(summary.dividendsWithholdingEur)}`,
+      `Dividends net EUR: ${formatReportMoney(summary.dividendsNetEur)}`,
+      '',
+      `Realized sell operations: ${summary.operations.sells}`,
+    ];
+
+    for (const row of summary.operations.detailedRows) {
+      lines.push(
+        `SELL ${row.tradedAt.slice(0, 10)} | ${row.assetTicker} | ${row.quantitySold} | Gross ${formatReportMoney(row.tradeGrossAmount)} ${row.tradeCurrency} | Fees ${formatReportMoney(row.feesAmount)} ${row.feesCurrency ?? row.tradeCurrency} | Proceeds EUR ${formatReportMoney(row.proceedsEur)} | Cost EUR ${formatReportMoney(row.costBasisEur)} | Gain/Loss EUR ${formatReportMoney(row.realizedGainLossEur)} | FX ${row.fxRateToEur ?? 'n/a'} | Ref ${row.externalReference ?? '-'} | Source ${row.source ?? '-'}`,
+      );
+      lines.push(`  Asset: ${row.assetName} | ISIN: ${row.assetIsin} | Account: ${row.accountName}`);
+    }
+
+    lines.push('', `Dividend operations: ${summary.operations.dividends}`);
+
+    for (const row of summary.operations.dividendRows) {
+      lines.push(
+        `DIV ${row.tradedAt.slice(0, 10)} | ${row.assetTicker} | Gross ${formatReportMoney(row.dividendGross)} ${row.tradeCurrency} | Withholding ${formatReportMoney(row.withholdingTax)} ${row.tradeCurrency} | Net ${formatReportMoney(row.dividendNet)} ${row.tradeCurrency} | Gross EUR ${formatReportMoney(row.grossEur)} | Net EUR ${formatReportMoney(row.netEur)} | FX ${row.fxRateToEur ?? 'n/a'} | Ref ${row.externalReference ?? '-'} | Source ${row.source ?? '-'}`,
+      );
+      lines.push(`  Asset: ${row.assetName} | ISIN: ${row.assetIsin} | Account: ${row.accountName}`);
+    }
+
+    return lines;
+  };
+
+  app.get('/finances/tax/yearly-summary', async ({ query }) => {
+    const yearRaw = Number(query.year ?? new Date().getUTCFullYear());
+    const year = Number.isFinite(yearRaw)
+      ? Math.max(2000, Math.min(2100, Math.trunc(yearRaw)))
+      : new Date().getUTCFullYear();
+    return loadTaxYearlySummary(year);
+  });
+
+  app.get('/finances/tax/yearly-report.pdf', async ({ query }) => {
+    const yearRaw = Number(query.year ?? new Date().getUTCFullYear());
+    const year = Number.isFinite(yearRaw)
+      ? Math.max(2000, Math.min(2100, Math.trunc(yearRaw)))
+      : new Date().getUTCFullYear();
+    const summary = await loadTaxYearlySummary(year);
+    const bytes = renderPlainTextPdf(buildTaxReportLines(summary), {
+      title: `Hacienda Report ${year}`,
+    });
+
+    return new Response(bytes, {
+      headers: {
+        'content-type': 'application/pdf',
+        'content-disposition': `attachment; filename="finances-tax-report-${year}.pdf"`,
+      },
+    });
   });
 
   app.get('/finances/assets', async ({ query }) => {
@@ -4101,6 +4506,18 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       rows.filter((row) => row.id === assetRow.id),
     );
 
+    if (created) {
+      await recordAuditEvent({
+        entityType: 'asset',
+        entityId: created.id,
+        action: 'created',
+        actorType: 'user',
+        source: 'manual',
+        summary: `Asset created (${created.assetType})`,
+        next: normalizeAuditJson(created),
+      });
+    }
+
     set.status = 201;
     return created;
   });
@@ -4155,6 +4572,12 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     if (parsed.data.isActive !== undefined)
       values.isActive = parsed.data.isActive;
 
+    const previous = (
+      await listAssetViews().then((rows) =>
+        rows.filter((row) => row.id === params.id),
+      )
+    )[0] ?? null;
+
     const rows = await withTimedDb('update_asset', async () => {
       return db
         .update(assets)
@@ -4170,6 +4593,18 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     const [updated] = await listAssetViews().then((rows) =>
       rows.filter((row) => row.id === params.id),
     );
+    if (updated) {
+      await recordAuditEvent({
+        entityType: 'asset',
+        entityId: updated.id,
+        action: 'updated',
+        actorType: 'user',
+        source: 'manual',
+        summary: 'Asset metadata updated',
+        previous: normalizeAuditJson(previous),
+        next: normalizeAuditJson(updated),
+      });
+    }
     return updated;
   });
 
@@ -4222,6 +4657,12 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
       updatedAt: new Date(),
     };
 
+    const previousAssetView = (
+      await listAssetViews().then((rows) =>
+        rows.filter((row) => row.id === params.id),
+      )
+    )[0] ?? null;
+
     if (!existing) {
       await withTimedDb('insert_asset_position', async () => {
         return db
@@ -4245,10 +4686,34 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     const [updated] = await listAssetViews().then((rows) =>
       rows.filter((row) => row.id === params.id),
     );
+    if (updated) {
+      await recordAuditEvent({
+        entityType: 'asset_position',
+        entityId: params.id,
+        action: existing ? 'updated' : 'created',
+        actorType: 'user',
+        source: 'manual',
+        summary: existing ? 'Asset position updated' : 'Asset position created',
+        previous: normalizeAuditJson(previousAssetView?.position ?? null),
+        next: normalizeAuditJson(updated.position ?? null),
+        context: normalizeAuditJson({
+          asset: {
+            id: updated.id,
+            name: updated.name,
+            assetType: updated.assetType,
+          },
+        }),
+      });
+    }
     return updated;
   });
 
   app.delete('/finances/assets/:id', async ({ params, set }) => {
+    const previous = (
+      await listAssetViews().then((rows) =>
+        rows.filter((row) => row.id === params.id),
+      )
+    )[0] ?? null;
     const rows = await withTimedDb('deactivate_asset', async () => {
       return db
         .update(assets)
@@ -4258,6 +4723,21 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     });
     if (rows.length === 0) {
       throw new ApiHttpError(404, 'ASSET_NOT_FOUND', 'Asset does not exist');
+    }
+    if (previous) {
+      await recordAuditEvent({
+        entityType: 'asset',
+        entityId: previous.id,
+        action: 'archived',
+        actorType: 'user',
+        source: 'manual',
+        summary: 'Asset archived',
+        previous: normalizeAuditJson(previous),
+        next: normalizeAuditJson({
+          ...previous,
+          isActive: false,
+        }),
+      });
     }
     set.status = 204;
     return;

@@ -1,5 +1,9 @@
 import { createDbClient, sql } from '@second-brain/db';
 import type {
+  BackupRun,
+  JobRun,
+  OpsDashboardResponse,
+  OpsImportRunSummary,
   ServiceCheckNowResponse,
   ServiceName,
   ServiceStatus,
@@ -11,6 +15,77 @@ import { ApiHttpError } from '../../lib/errors';
 type ProbeTarget = {
   service: ServiceName;
   targetUrl: string;
+};
+
+const toIso = (value: unknown) =>
+  value instanceof Date ? value.toISOString() : String(value);
+
+const toNullableIso = (value: unknown) => {
+  if (value === null || value === undefined) return null;
+  return toIso(value);
+};
+
+const toNullableString = (value: unknown) => {
+  if (value === null || value === undefined) return null;
+  return String(value);
+};
+
+const toNullableNumber = (value: unknown) => {
+  if (value === null || value === undefined) return null;
+  return Number(value);
+};
+
+const serializeJobRun = (row: Record<string, unknown>): JobRun => ({
+  id: String(row.id),
+  jobName: String(row.jobName),
+  scheduledAt: toIso(row.scheduledAt),
+  startedAt: toIso(row.startedAt),
+  finishedAt: toNullableIso(row.finishedAt),
+  status: String(row.status) as JobRun['status'],
+  errorMessage: toNullableString(row.errorMessage),
+  metricsJson:
+    row.metricsJson && typeof row.metricsJson === 'object'
+      ? (row.metricsJson as Record<string, unknown>)
+      : {},
+});
+
+const serializeBackupRun = (row: Record<string, unknown>): BackupRun => ({
+  id: String(row.id),
+  backupType: String(row.backupType),
+  startedAt: toIso(row.startedAt),
+  finishedAt: toNullableIso(row.finishedAt),
+  status: String(row.status) as BackupRun['status'],
+  fileName: toNullableString(row.fileName),
+  filePath: toNullableString(row.filePath),
+  fileSizeBytes: toNullableNumber(row.fileSizeBytes),
+  fileSha256: toNullableString(row.fileSha256),
+  verifiedAt: toNullableIso(row.verifiedAt),
+  errorMessage: toNullableString(row.errorMessage),
+  metricsJson:
+    row.metricsJson && typeof row.metricsJson === 'object'
+      ? (row.metricsJson as Record<string, unknown>)
+      : {},
+  fileDeletedAt: toNullableIso(row.fileDeletedAt),
+});
+
+const serializeImportRun = (
+  row: Record<string, unknown>,
+): OpsImportRunSummary => {
+  const dryRun = Boolean(row.dryRun);
+  const failedRows = Number(row.failedRows ?? 0);
+  return {
+    id: String(row.id),
+    source: String(row.source),
+    accountId: String(row.accountId),
+    filename: String(row.filename),
+    dryRun,
+    totalRows: Number(row.totalRows ?? 0),
+    importedRows: Number(row.importedRows ?? 0),
+    skippedRows: Number(row.skippedRows ?? 0),
+    failedRows,
+    createdAt: toIso(row.createdAt),
+    reviewRecommended: dryRun || failedRows > 0,
+  };
 };
 
 const bucketHourIso = (date: Date) => {
@@ -206,4 +281,92 @@ export const registerOpsRoutes = (
       };
     },
   );
+
+  app.get('/ops/dashboard', async ({ query }): Promise<OpsDashboardResponse> => {
+    const limitRaw = Number(query.limit ?? 6);
+    if (!Number.isFinite(limitRaw)) {
+      throw new ApiHttpError(400, 'VALIDATION_ERROR', 'limit must be a number');
+    }
+    const limit = Math.max(1, Math.min(20, Math.floor(limitRaw || 6)));
+
+    const [jobRows, backupRows, importRows] = await Promise.all([
+      db.execute(sql`
+        select
+          id,
+          job_name as "jobName",
+          scheduled_at as "scheduledAt",
+          started_at as "startedAt",
+          finished_at as "finishedAt",
+          status,
+          error_message as "errorMessage",
+          metrics_json as "metricsJson"
+        from core.job_runs
+        order by started_at desc
+        limit ${limit}
+      `),
+      db.execute(sql`
+        select
+          id,
+          backup_type as "backupType",
+          started_at as "startedAt",
+          finished_at as "finishedAt",
+          status,
+          file_name as "fileName",
+          file_path as "filePath",
+          file_size_bytes as "fileSizeBytes",
+          file_sha256 as "fileSha256",
+          verified_at as "verifiedAt",
+          error_message as "errorMessage",
+          metrics_json as "metricsJson",
+          file_deleted_at as "fileDeletedAt"
+        from core.backup_runs
+        order by started_at desc
+        limit ${limit}
+      `),
+      db.execute(sql`
+        select
+          id,
+          source,
+          account_id as "accountId",
+          filename,
+          dry_run as "dryRun",
+          total_rows as "totalRows",
+          imported_rows as "importedRows",
+          skipped_rows as "skippedRows",
+          failed_rows as "failedRows",
+          created_at as "createdAt"
+        from finances.transaction_imports
+        order by created_at desc
+        limit ${limit}
+      `),
+    ]);
+
+    const jobs = jobRows.map((row) => serializeJobRun(row as Record<string, unknown>));
+    const backups = backupRows.map((row) =>
+      serializeBackupRun(row as Record<string, unknown>),
+    );
+    const imports = importRows.map((row) =>
+      serializeImportRun(row as Record<string, unknown>),
+    );
+
+    const latestBackup = backups[0] ?? null;
+
+    return {
+      generatedAt: new Date().toISOString(),
+      jobs,
+      backups,
+      imports,
+      summary: {
+        failedJobs: jobs.filter((job) => job.status === 'failed').length,
+        failedImports: imports.filter((item) => item.failedRows > 0).length,
+        reviewImports: imports.filter((item) => item.reviewRecommended).length,
+        latestBackupAt: latestBackup?.startedAt ?? null,
+        latestBackupStatus: latestBackup?.status ?? null,
+        backupFresh: latestBackup
+          ? Date.now() - new Date(latestBackup.startedAt).getTime() <=
+            36 * 3600_000
+          : false,
+      },
+    };
+  });
 };

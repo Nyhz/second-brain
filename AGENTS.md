@@ -1,121 +1,130 @@
 # AGENTS.md (root) — Second Brain Platform
 
 ## Mission
-`second-brain` is my local-first personal platform: multiple apps (finances, calendar, tasks, etc.) running 24/7 on my Mac Mini, sharing infrastructure, data, and integrations. The system must be easy to scale and automate, while staying maintainable and consistent.
+`second-brain` is a local-first, self-hosted personal platform composed of multiple domain apps that share infrastructure, data, and operational tooling.
 
-This repo is designed so that an agent (Codex/AI) can safely implement features with minimal ambiguity.
+The current live platform centers on:
+- `portal` as the front door and operations entrypoint
+- `finances-panel` as the main domain app
+- `api` as the shared backend
+- `worker` as the background job runner
+
+This repo is structured so an agent can make safe, incremental changes without guessing architecture or deployment conventions.
 
 ## Core Principles
-1. **Local-first & self-hosted**: Everything must run locally. External APIs are optional integrations (e.g., market prices).
-2. **One platform, many apps**: Shared foundations; domain boundaries remain clean.
-3. **Incremental elegance**: Start simple; scale via clean seams (schemas, modules, packages).
-4. **Data longevity**: Finance data (especially) must be durable, auditable, migratable.
-5. **Automation as a first-class citizen**: background jobs, scheduled updates, and future Telegram actions.
-6. **Docker-first deployment**: Every service/app runs in containers.
+1. **Local-first & self-hosted**: the platform must run locally on the home infrastructure.
+2. **One platform, many apps**: domain apps can grow independently while reusing shared foundations.
+3. **Incremental elegance**: prefer small, clean seams over speculative abstraction.
+4. **Data longevity**: finance and platform data must stay durable, inspectable, and migratable.
+5. **Automation first**: recurring jobs, imports, snapshots, and operational checks are part of the product.
+6. **Docker-first deployment**: production-like local orchestration happens through Docker Compose.
 
-## High-Level Architecture (v1)
-- **Apps**: Web UIs per domain (currently `portal` + `finances-panel`, with more domains later).
-- **Shared API**: Modular backend that hosts domain modules (finances, calendar, etc.).
-- **Shared DB**: One Postgres instance, **one schema per app/domain**.
-- **Shared packages**: types, env/config loading, and DB utilities.
-- **UI ownership**: app-local UI components/primitives per app; avoid cross-app UI coupling by default.
-- **Workers**: background jobs (cron/scheduler) to update pricing, imports, etc.
-- **Edge gateway**: Caddy routes traffic (`/`, `/finances`, `/api`, `/worker`) and exposes health.
-- **Integrations** (future): Telegram bot gateway shared across apps.
+## High-Level Architecture
+- **Portal app**: served at `/`, currently a minimal landing page with top navigation to the live app and a dedicated status page at `/status`
+- **Finances app**: served at `/finances`, currently the primary live domain app
+- **Shared API**: modular backend under `services/api`, currently exposing finances and ops routes
+- **Worker**: scheduled jobs for health checks, price sync, valuation snapshots, and derived balances
+- **Shared DB**: Postgres with per-domain schemas (`core`, `finances`, and future schemas)
+- **Shared packages**: types, config, and DB utilities under `packages/*`
+- **Edge gateway**: Caddy routes `/`, `/status`, `/finances`, `/api`, and `/worker`
+
+## Current Platform Surface
+- `portal`
+  - `/` is a lightweight landing page
+  - `/status` is the engineering-oriented operations page
+  - supports theme persistence and live ops checks
+- `finances-panel`
+  - overview dashboard
+  - assets
+  - accounts
+  - transactions
+  - taxes
+- `api`
+  - finances module
+  - ops module
+- `worker`
+  - service health checks
+  - Yahoo price sync
+  - daily balance computation
+  - asset valuation snapshots
 
 ## Database Strategy
-- Single Postgres cluster for the platform.
-- One schema per domain/app (e.g., `finances`, `calendar`, `core`).
-- Migrations are mandatory for schema changes.
-- Data model must support:
-  - historical data (e.g., price history)
-  - auditability (immutable transaction events where relevant)
-  - future multi-user/SaaS conversion (add `user_id` later without painful rewrites)
+- Single Postgres cluster for the platform
+- One schema per domain/app where appropriate
+- Migrations are mandatory for schema changes
+- Prefer data models that preserve:
+  - historical values
+  - auditability
+  - clean future migration toward multi-user support
 
 ## Deployment Strategy
-- Docker Compose for local orchestration, invoked through Bun scripts.
-- Each app/service runs in its own container.
-- The DB runs as a container with persistent volumes.
-- Services talk over an internal Docker network.
-- Expose only what is needed to localhost.
+- Docker Compose is the canonical orchestration layer
+- Each app/service runs in its own container
+- Services communicate over the internal Docker network
+- Expose only what is needed on localhost
 - Canonical workflows:
-  - `bun run infra:up` (start)
-  - `bun run infra:up:build` (rebuild + restart)
-  - `bun run infra:ps` (status)
-
-## Suggested Repo Layout (may evolve)
-second-brain/
-  apps/
-    portal/
-    finances-panel/
-  services/
-    api/              # modular API (domain modules)
-    worker/           # scheduled jobs
-  packages/
-    types/            # shared TS types
-    db/               # db client, migrations, schema helpers
-    config/           # env schema + config loader
-  infra/
-    docker/           # compose, env templates, scripts
-  docs/
-    adr/              # architectural decisions
-  scripts/
-
-> If the actual folder structure differs, respect it. Create new folders only when needed.
+  - `bun run infra:up`
+  - `bun run infra:up:build`
+  - `bun run infra:ps`
 
 ## API Design Rules
-- Prefer modular endpoints by domain (`/finances/...`, `/calendar/...`).
-- Validate all inputs (e.g., Zod).
-- Standardize error shape: `{ code, message, details? }`.
-- Versioning: not required in v1, but keep routing structure stable.
+- Prefer modular routing by domain, for example:
+  - `/finances/...`
+  - `/ops/...`
+- Validate inputs and outputs with shared Zod schemas
+- Standardize error shape as `{ code, message, details? }`
+- Keep routes stable even if the UI evolves
 
 ## Auth & Security
-- v1: **single-user, localhost-only**, no auth.
-- However: avoid painting into a corner:
-  - Keep models ready for a future `user_id`.
-  - Avoid global mutable state tied to “the one user”.
-- Never expose secrets in code or commit `.env` values.
+- Current mode is single-user and localhost-only
+- No auth is required in v1
+- Do not commit secrets or real personal data
+- Avoid introducing irreversible single-user assumptions in data or service boundaries
 
-## Observability & Ops (v1 minimum)
-- Structured logs (JSON) with consistent fields.
-- Health endpoints for services (`/health`).
-- Portal home includes a live operations status surface (history + check-now).
+## Observability & Ops
+- Structured JSON logs are preferred for services and workers
+- Every long-running service should expose a health endpoint
+- The portal status page is the primary human-facing ops surface
+- Current ops capabilities include:
+  - persisted service health history
+  - live `check-now` probes
+  - worker-driven recurring health checks
 
-## Agent Rules (Codex/AI)
+## Agent Rules
 1. **Read first**
-   - Always read this file and the target app’s `AGENTS.md` before changes.
-2. **Small, verifiable changes**
-   - Prefer small commits with working state.
-3. **Don’t invent requirements**
-   - If missing info is blocking, write an “Open Questions” section in the nearest README or create an ADR in `docs/adr/`.
-4. **Document decisions**
-   - Any new library/stack/architecture choice must be recorded in an ADR.
-5. **Respect boundaries**
-   - Keep domain logic inside its module/schema. Avoid cross-domain coupling.
-6. **No real personal data**
-   - Use synthetic seed data only.
-7. **Post-task infra rebuild (required for code/config/infra changes)**
-   - After finishing any code/config/infra change task, run:
+   - Read this file and the target app’s `AGENTS.md` before making changes.
+2. **Prefer repo truth over assumptions**
+   - Check the implemented routes, schemas, tests, and UI before describing or extending behavior.
+3. **Small, verifiable changes**
+   - Keep changes incremental and validate them locally before finalizing.
+4. **Respect boundaries**
+   - Keep domain logic inside its app/module/schema.
+5. **No real personal data**
+   - Use synthetic/demo data only.
+6. **Document meaningful architectural decisions**
+   - New architectural or stack choices should be captured in an ADR when they materially change the platform.
+7. **Post-task infra rebuild**
+   - For completed code/config/infra tasks, run:
      - `bun run infra:up:build`
      - `bun run infra:ps`
-   - Include a brief service health summary in the final update.
-   - For planning-only, discussion-only, or read-only review tasks, this rebuild step is not required.
+   - For planning-only, discussion-only, or read-only analysis, this is not required.
 
-## Definition of Done (platform-level)
-- `bun run infra:up:build` starts/rebuilds all required services cleanly.
-- `bun run infra:ps` shows platform services healthy (`postgres`, `api`, `worker`, `finances-panel`, `portal`, `caddy`).
-- Each service has a health check.
-- Migrations are repeatable and documented.
-- Portal and finances app can display working MVP flows end-to-end.
+## Definition of Done
+- Relevant local checks pass for the affected app/service
+- `bun run infra:up:build` completes successfully for completed implementation tasks
+- `bun run infra:ps` shows healthy platform services:
+  - `postgres`
+  - `api`
+  - `worker`
+  - `finances-panel`
+  - `portal`
+  - `caddy`
+- New behavior is consistent with the current platform architecture and route ownership
 
 ## Runtime & Tooling
-
-- Runtime: **Bun** (not Node.js).
-- Package manager: **bun** (not npm, pnpm, or yarn).
-- Scripts must use `bun run`.
-- Dev server must be started with `bun`.
-- Tests must be executed with `bun test`.
-
-Agents must not introduce npm, pnpm, or yarn.
-If a dependency requires Node-only features incompatible with Bun,
-document the limitation before introducing it.
+- Runtime: **Bun**
+- Package manager: **bun**
+- Scripts must use `bun run`
+- Tests must use `bun test`
+- Do not introduce npm, pnpm, or yarn
+- If a dependency requires Node-only behavior incompatible with Bun, document that limitation before adding it

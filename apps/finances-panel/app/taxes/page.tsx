@@ -5,6 +5,13 @@ import { getApiErrorMessage } from '../../lib/errors';
 type TaxSummary = {
   year: number;
   realizedGainLossEur: number;
+  dividendsGrossEur: number;
+  dividendsWithholdingEur: number;
+  dividendsNetEur: number;
+  operations: {
+    sells: number;
+    dividends: number;
+  };
 };
 
 const getSingleSearchParam = (
@@ -42,6 +49,7 @@ export default async function TaxesPage({
     <TaxesFeature
       taxYear={taxYear}
       summary={summary}
+      reportUrl={`/api/finances/tax/yearly-report.pdf?year=${taxYear}`}
       errorMessage={errorMessage}
     />
   );

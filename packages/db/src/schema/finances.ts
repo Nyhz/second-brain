@@ -129,9 +129,21 @@ export const assetTransactions = financesSchema.table(
     transactionType: varchar('transaction_type', { length: 16 }).notNull(),
     tradedAt: timestamp('traded_at', { withTimezone: true }).notNull(),
     quantity: numeric('quantity', { precision: 24, scale: 8 }).notNull(),
-    unitPrice: numeric('unit_price', { precision: 18, scale: 6 }).notNull(),
+    unitPrice: numeric('unit_price', { precision: 24, scale: 12 }).notNull(),
     tradeCurrency: varchar('trade_currency', { length: 3 }).notNull(),
     fxRateToEur: numeric('fx_rate_to_eur', { precision: 18, scale: 8 }),
+    tradeGrossAmount: numeric('trade_gross_amount', {
+      precision: 18,
+      scale: 6,
+    })
+      .notNull()
+      .default('0'),
+    tradeGrossAmountEur: numeric('trade_gross_amount_eur', {
+      precision: 18,
+      scale: 2,
+    })
+      .notNull()
+      .default('0'),
     cashImpactEur: numeric('cash_impact_eur', { precision: 18, scale: 2 })
       .notNull()
       .default('0'),
@@ -139,14 +151,22 @@ export const assetTransactions = financesSchema.table(
       .notNull()
       .default('0'),
     feesCurrency: varchar('fees_currency', { length: 3 }),
+    feesAmountEur: numeric('fees_amount_eur', { precision: 18, scale: 2 })
+      .notNull()
+      .default('0'),
+    netAmountEur: numeric('net_amount_eur', { precision: 18, scale: 2 })
+      .notNull()
+      .default('0'),
     dividendGross: numeric('dividend_gross', { precision: 18, scale: 6 }),
     withholdingTax: numeric('withholding_tax', { precision: 18, scale: 6 }),
     dividendNet: numeric('dividend_net', { precision: 18, scale: 6 }),
+    settlementDate: date('settlement_date'),
     linkedTransactionId: uuid('linked_transaction_id'),
     externalReference: text('external_reference'),
     rowFingerprint: varchar('row_fingerprint', { length: 64 }),
     source: varchar('source', { length: 64 }).notNull().default('manual'),
     notes: text('notes'),
+    rawPayload: jsonb('raw_payload').$type<Record<string, unknown>>(),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -356,5 +376,36 @@ export const assetValuations = financesSchema.table(
       table.valuationDate,
     ),
     dateIdx: index('asset_valuations_date_idx').on(table.valuationDate),
+  }),
+);
+
+export const auditEvents = financesSchema.table(
+  'audit_events',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    entityType: varchar('entity_type', { length: 64 }).notNull(),
+    entityId: uuid('entity_id').notNull(),
+    action: varchar('action', { length: 32 }).notNull(),
+    actorType: varchar('actor_type', { length: 32 }).notNull(),
+    source: varchar('source', { length: 64 }).notNull(),
+    summary: text('summary').notNull(),
+    previousJson: jsonb('previous_json').$type<Record<string, unknown> | null>(),
+    nextJson: jsonb('next_json').$type<Record<string, unknown> | null>(),
+    contextJson: jsonb('context_json').$type<Record<string, unknown>>(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (table) => ({
+    entityCreatedIdx: index('audit_events_entity_created_idx').on(
+      table.entityType,
+      table.entityId,
+      table.createdAt,
+    ),
+    sourceCreatedIdx: index('audit_events_source_created_idx').on(
+      table.source,
+      table.createdAt,
+    ),
+    createdIdx: index('audit_events_created_idx').on(table.createdAt),
   }),
 );

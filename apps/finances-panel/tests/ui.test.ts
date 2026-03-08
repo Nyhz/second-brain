@@ -140,6 +140,44 @@ describe('finances panel workflow helpers', () => {
         notes: 'note',
       },
     });
+
+    expect(
+      validateTransactionForm({
+        accountId: '1',
+        assetType: 'stock',
+        assetId: '2',
+        transactionType: 'buy',
+        tradedAt: '2026-03-03T12:00',
+        quantity: '2',
+        unitPrice: '12.35',
+        tradeCurrency: 'GBP',
+        fxRateToEur: '1.17',
+        feesAmount: '0.5',
+        feesCurrency: 'GBP',
+        dividendGross: '',
+        dividendNet: '',
+        notes: '',
+      }),
+    ).toEqual({
+      ok: true,
+      normalized: {
+        accountId: '1',
+        assetType: 'stock',
+        assetId: '2',
+        transactionType: 'buy',
+        tradedAt: '2026-03-03T12:00',
+        quantity: 2,
+        unitPrice: 12.35,
+        tradeCurrency: 'GBP',
+        fxRateToEur: 1.17,
+        feesAmount: 0.5,
+        feesCurrency: 'GBP',
+        dividendGross: null,
+        withholdingTax: null,
+        dividendNet: null,
+        notes: null,
+      },
+    });
   });
 
   test('formats amounts and dates for display', () => {

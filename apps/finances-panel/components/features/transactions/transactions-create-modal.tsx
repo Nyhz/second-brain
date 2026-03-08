@@ -122,6 +122,21 @@ export function TransactionsCreateModal({
     return 0;
   }, [createMode, depositAmount, form]);
 
+  const grossTradePreview = useMemo(() => {
+    if (createMode !== 'asset_transaction') {
+      return Number.NaN;
+    }
+    const quantity = Number(form.quantity || '0');
+    const unitPrice = Number(form.unitPrice || '0');
+    const value = quantity * unitPrice;
+    return Number.isFinite(value) ? value : Number.NaN;
+  }, [createMode, form.quantity, form.unitPrice]);
+
+  const feePreview = useMemo(() => {
+    const value = Number(form.feesAmount || '0');
+    return Number.isFinite(value) ? value : Number.NaN;
+  }, [form.feesAmount]);
+
   const withholdingPreview = useMemo(() => {
     const gross = Number(form.dividendGross || '0');
     const net = Number(form.dividendNet || '0');
@@ -475,6 +490,7 @@ export function TransactionsCreateModal({
                     setForm((current) => ({
                       ...current,
                       tradeCurrency: event.target.value,
+                      feesCurrency: event.target.value,
                       fxRateToEur:
                         event.target.value === 'EUR' ? '' : current.fxRateToEur,
                     }))
@@ -508,7 +524,7 @@ export function TransactionsCreateModal({
             {form.transactionType !== 'dividend' ? (
               <div className="grid gap-1.5">
                 <label className="text-sm font-medium" htmlFor="transaction-fees">
-                  Fees (EUR)
+                  Fees ({form.tradeCurrency})
                 </label>
                 <input
                   id="transaction-fees"
@@ -518,7 +534,7 @@ export function TransactionsCreateModal({
                     setForm((current) => ({
                       ...current,
                       feesAmount: event.target.value,
-                      feesCurrency: 'EUR',
+                      feesCurrency: current.tradeCurrency,
                     }))
                   }
                 />
@@ -559,18 +575,35 @@ export function TransactionsCreateModal({
           />
         </div>
 
-        <p className="text-xs text-muted-foreground">
-          Cash impact preview:{' '}
-          {Number.isFinite(cashImpactPreview) ? (
-            <span className="sb-sensitive-value">
-              {formatMoney(cashImpactPreview)}
-            </span>
-          ) : createMode === 'deposit' ? (
-            'invalid amount'
-          ) : (
-            'requires FX'
-          )}
-        </p>
+        <div className="space-y-1 text-xs text-muted-foreground">
+          {createMode === 'asset_transaction' &&
+          form.transactionType !== 'dividend' ? (
+            <>
+              <p>
+                Gross trade amount ({form.tradeCurrency}):{' '}
+                {Number.isFinite(grossTradePreview)
+                  ? grossTradePreview.toFixed(6)
+                  : 'invalid'}
+              </p>
+              <p>
+                Fees ({form.tradeCurrency}):{' '}
+                {Number.isFinite(feePreview) ? feePreview.toFixed(6) : 'invalid'}
+              </p>
+            </>
+          ) : null}
+          <p>
+            Net EUR cash impact:{' '}
+            {Number.isFinite(cashImpactPreview) ? (
+              <span className="sb-sensitive-value">
+                {formatMoney(cashImpactPreview)}
+              </span>
+            ) : createMode === 'deposit' ? (
+              'invalid amount'
+            ) : (
+              'requires FX'
+            )}
+          </p>
+        </div>
 
         <Button type="submit" variant="primary" disabled={isSaving} fullWidth>
           {isSaving

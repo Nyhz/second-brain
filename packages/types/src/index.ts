@@ -83,17 +83,23 @@ export const assetTransactionSchema = z.object({
   unitPrice: z.number(),
   tradeCurrency: z.string().length(3),
   fxRateToEur: z.number().nullable(),
+  tradeGrossAmount: z.number(),
+  tradeGrossAmountEur: z.number(),
   cashImpactEur: z.number(),
   feesAmount: z.number(),
   feesCurrency: z.string().length(3).nullable(),
+  feesAmountEur: z.number(),
+  netAmountEur: z.number(),
   dividendGross: z.number().nullable(),
   withholdingTax: z.number().nullable(),
   dividendNet: z.number().nullable(),
+  settlementDate: z.string().nullable(),
   linkedTransactionId: z.string().uuid().nullable().optional(),
   externalReference: z.string().nullable(),
   rowFingerprint: z.string().nullable().optional(),
   source: z.string().nullable().optional(),
   notes: z.string().nullable(),
+  rawPayload: z.record(z.string(), z.unknown()).nullable().optional(),
   createdAt: z.string(),
   updatedAt: z.string(),
 });
@@ -433,15 +439,82 @@ export const unifiedTransactionRowSchema = z.object({
   quantity: z.number().nullable(),
   unitPrice: z.number().nullable(),
   amountNative: z.number(),
+  tradeGrossAmount: z.number().nullable(),
   currency: z.string().length(3),
   fxRateToEur: z.number().nullable(),
   cashImpactEur: z.number(),
+  feesAmount: z.number().nullable(),
+  feesCurrency: z.string().nullable(),
+  feesAmountEur: z.number().nullable(),
+  netAmountEur: z.number().nullable(),
   linkedTransactionId: z.string().uuid().nullable(),
   notes: z.string().nullable(),
   externalReference: z.string().nullable(),
   source: z.string().nullable(),
 });
 export type UnifiedTransactionRow = z.infer<typeof unifiedTransactionRowSchema>;
+
+export const taxYearlySellRowSchema = z.object({
+  transactionId: z.string().uuid(),
+  tradedAt: z.string(),
+  assetId: z.string().uuid(),
+  assetTicker: z.string(),
+  assetName: z.string(),
+  assetIsin: z.string(),
+  accountId: z.string().uuid(),
+  accountName: z.string(),
+  quantitySold: z.number(),
+  tradeCurrency: z.string().length(3),
+  fxRateToEur: z.number().nullable(),
+  tradeGrossAmount: z.number(),
+  tradeGrossAmountEur: z.number(),
+  feesAmount: z.number(),
+  feesCurrency: z.string().length(3).nullable(),
+  feesAmountEur: z.number(),
+  proceedsEur: z.number(),
+  costBasisEur: z.number(),
+  realizedGainLossEur: z.number(),
+  externalReference: z.string().nullable(),
+  source: z.string().nullable(),
+});
+export type TaxYearlySellRow = z.infer<typeof taxYearlySellRowSchema>;
+
+export const taxYearlyDividendRowSchema = z.object({
+  transactionId: z.string().uuid(),
+  tradedAt: z.string(),
+  assetId: z.string().uuid(),
+  assetTicker: z.string(),
+  assetName: z.string(),
+  assetIsin: z.string(),
+  accountId: z.string().uuid(),
+  accountName: z.string(),
+  tradeCurrency: z.string().length(3),
+  fxRateToEur: z.number().nullable(),
+  dividendGross: z.number(),
+  withholdingTax: z.number(),
+  dividendNet: z.number(),
+  grossEur: z.number(),
+  withholdingEur: z.number(),
+  netEur: z.number(),
+  externalReference: z.string().nullable(),
+  source: z.string().nullable(),
+});
+export type TaxYearlyDividendRow = z.infer<typeof taxYearlyDividendRowSchema>;
+
+export const taxYearlySummarySchema = z.object({
+  year: z.number().int(),
+  realizedGainLossEur: z.number(),
+  dividendsGrossEur: z.number(),
+  dividendsWithholdingEur: z.number(),
+  dividendsNetEur: z.number(),
+  operations: z.object({
+    sells: z.number().int().nonnegative(),
+    dividends: z.number().int().nonnegative(),
+    detailedRows: z.array(taxYearlySellRowSchema),
+    dividendRows: z.array(taxYearlyDividendRowSchema),
+  }),
+});
+export type TaxYearlySummary = z.infer<typeof taxYearlySummarySchema>;
 
 export const financesSummarySchema = z.object({
   totalBalance: z.number(),
@@ -707,6 +780,79 @@ export const jobRunSchema = z.object({
 });
 
 export type JobRun = z.infer<typeof jobRunSchema>;
+
+export const backupRunSchema = z.object({
+  id: z.string().uuid(),
+  backupType: z.string(),
+  startedAt: z.string(),
+  finishedAt: z.string().nullable(),
+  status: z.enum(['success', 'failed', 'skipped']),
+  fileName: z.string().nullable(),
+  filePath: z.string().nullable(),
+  fileSizeBytes: z.number().int().nullable(),
+  fileSha256: z.string().nullable(),
+  verifiedAt: z.string().nullable(),
+  errorMessage: z.string().nullable(),
+  metricsJson: z.record(z.unknown()),
+  fileDeletedAt: z.string().nullable(),
+});
+export type BackupRun = z.infer<typeof backupRunSchema>;
+
+export const opsImportRunSummarySchema = z.object({
+  id: z.string().uuid(),
+  source: z.string(),
+  accountId: z.string().uuid(),
+  filename: z.string(),
+  dryRun: z.boolean(),
+  totalRows: z.number().int().nonnegative(),
+  importedRows: z.number().int().nonnegative(),
+  skippedRows: z.number().int().nonnegative(),
+  failedRows: z.number().int().nonnegative(),
+  createdAt: z.string(),
+  reviewRecommended: z.boolean(),
+});
+export type OpsImportRunSummary = z.infer<typeof opsImportRunSummarySchema>;
+
+export const opsDashboardSummarySchema = z.object({
+  failedJobs: z.number().int().nonnegative(),
+  failedImports: z.number().int().nonnegative(),
+  reviewImports: z.number().int().nonnegative(),
+  latestBackupAt: z.string().nullable(),
+  latestBackupStatus: z.enum(['success', 'failed', 'skipped']).nullable(),
+  backupFresh: z.boolean(),
+});
+export type OpsDashboardSummary = z.infer<typeof opsDashboardSummarySchema>;
+
+export const opsDashboardResponseSchema = z.object({
+  generatedAt: z.string(),
+  jobs: z.array(jobRunSchema),
+  backups: z.array(backupRunSchema),
+  imports: z.array(opsImportRunSummarySchema),
+  summary: opsDashboardSummarySchema,
+});
+export type OpsDashboardResponse = z.infer<typeof opsDashboardResponseSchema>;
+
+export const financeAuditEventSchema = z.object({
+  id: z.string().uuid(),
+  entityType: z.string(),
+  entityId: z.string().uuid(),
+  action: z.string(),
+  actorType: z.string(),
+  source: z.string(),
+  summary: z.string(),
+  previousJson: z.record(z.unknown()).nullable(),
+  nextJson: z.record(z.unknown()).nullable(),
+  contextJson: z.record(z.unknown()).nullable(),
+  createdAt: z.string(),
+});
+export type FinanceAuditEvent = z.infer<typeof financeAuditEventSchema>;
+
+export const financeAuditEventsResponseSchema = z.object({
+  rows: z.array(financeAuditEventSchema),
+});
+export type FinanceAuditEventsResponse = z.infer<
+  typeof financeAuditEventsResponseSchema
+>;
 
 export const serviceNameSchema = z.enum(['api', 'worker', 'caddy']);
 export type ServiceName = z.infer<typeof serviceNameSchema>;

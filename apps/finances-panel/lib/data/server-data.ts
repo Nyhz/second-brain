@@ -2,6 +2,7 @@ import { cache } from 'react';
 import { apiRequest } from '../api';
 import type { OverviewRange, OverviewState } from '../dashboard-types';
 import { loadAccountsData } from './accounts-data';
+import { loadAuditData } from './audit-data';
 import { loadAssetsData } from './assets-data';
 import { loadOverview } from './overview-data';
 import { loadTransactionsData } from './transactions-data';
@@ -9,6 +10,13 @@ import { loadTransactionsData } from './transactions-data';
 type TaxSummary = {
   year: number;
   realizedGainLossEur: number;
+  dividendsGrossEur: number;
+  dividendsWithholdingEur: number;
+  dividendsNetEur: number;
+  operations: {
+    sells: number;
+    dividends: number;
+  };
 };
 
 export const loadServerAccountsData = cache(async () => loadAccountsData());
@@ -39,4 +47,13 @@ export const loadServerTaxSummary = cache(async (taxYear: number) =>
       revalidate: 300,
     },
   }),
+);
+
+export const loadServerAuditData = cache(
+  async (entityType?: string, entityId?: string, limit?: number) =>
+    loadAuditData({
+      ...(entityType ? { entityType } : {}),
+      ...(entityId ? { entityId } : {}),
+      ...(limit !== undefined ? { limit } : {}),
+    }),
 );

@@ -7,15 +7,24 @@ import { TaxYearControls } from './tax-year-controls';
 type TaxSummary = {
   year: number;
   realizedGainLossEur: number;
+  dividendsGrossEur: number;
+  dividendsWithholdingEur: number;
+  dividendsNetEur: number;
+  operations: {
+    sells: number;
+    dividends: number;
+  };
 };
 
 export function TaxesFeature({
   taxYear,
   summary,
+  reportUrl,
   errorMessage,
 }: {
   taxYear: number;
   summary: TaxSummary | null;
+  reportUrl: string;
   errorMessage: string | null;
 }) {
   return (
@@ -40,7 +49,22 @@ export function TaxesFeature({
             </span>
           }
         />
-        <KpiCard label="Tax Year" value={String(summary?.year ?? taxYear)} />
+        <KpiCard
+          label="Dividends Net EUR"
+          value={
+            <span className="sb-sensitive-value">
+              {formatMoney(summary?.dividendsNetEur ?? 0)}
+            </span>
+          }
+        />
+        <KpiCard
+          label="Sell Operations"
+          value={String(summary?.operations.sells ?? 0)}
+        />
+        <KpiCard
+          label="Dividend Operations"
+          value={String(summary?.operations.dividends ?? 0)}
+        />
       </section>
 
       <Card title="Year-End Tax Summary">
@@ -56,11 +80,35 @@ export function TaxesFeature({
                     {formatMoney(summary.realizedGainLossEur)}
                   </span>
                 </p>
+                <p>
+                  Dividends Gross:{' '}
+                  <span className="sb-sensitive-value">
+                    {formatMoney(summary.dividendsGrossEur)}
+                  </span>
+                </p>
+                <p>
+                  Dividends Withholding:{' '}
+                  <span className="sb-sensitive-value">
+                    {formatMoney(summary.dividendsWithholdingEur)}
+                  </span>
+                </p>
+                <p>
+                  Dividends Net:{' '}
+                  <span className="sb-sensitive-value">
+                    {formatMoney(summary.dividendsNetEur)}
+                  </span>
+                </p>
               </>
             ) : (
               <p>No summary loaded.</p>
             )}
           </div>
+          <a
+            className="inline-flex h-10 items-center justify-center rounded-md border border-border bg-card px-4 text-sm font-medium transition hover:bg-accent hover:text-accent-foreground"
+            href={reportUrl}
+          >
+            Download Annual PDF
+          </a>
         </div>
       </Card>
     </div>

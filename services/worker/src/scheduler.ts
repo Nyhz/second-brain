@@ -2,6 +2,7 @@ import { loadWorkerEnv } from '@second-brain/config';
 import { createDbClient } from '@second-brain/db';
 import { checkServiceHealth } from './jobs/check-service-health';
 import { computeDailyBalances } from './jobs/compute-balances';
+import { createDatabaseBackup } from './jobs/create-database-backup';
 import { snapshotAssetValuations } from './jobs/snapshot-asset-valuations';
 import { syncYahooPrices } from './jobs/sync-yahoo-prices';
 import { runWithAdvisoryLock } from './lib/jobs';
@@ -105,6 +106,45 @@ export const startScheduler = () => {
     }
   };
 
+  const runDatabaseBackupJob = async () => {
+    if (!env.BACKUP_ENABLED) {
+      return;
+    }
+
+    const now = new Date();
+    if (
+      !shouldRunToday(
+        now,
+        env.BACKUP_TARGET_HOUR_UTC,
+        env.BACKUP_TARGET_MINUTE_UTC,
+      )
+    ) {
+      return;
+    }
+
+    const jobName = 'core_create_database_backup_daily';
+    try {
+      const alreadyRun = await hasSuccessfulRunInUtcDay(
+        env.DATABASE_URL,
+        jobName,
+        now,
+      );
+      if (alreadyRun) {
+        return;
+      }
+
+      await runWithAdvisoryLock(env.DATABASE_URL, jobName, now, () =>
+        createDatabaseBackup(
+          env.DATABASE_URL,
+          env.BACKUP_DIR,
+          env.BACKUP_RETENTION_COUNT,
+        ),
+      );
+    } catch (error) {
+      log('error', 'database_backup_job_failed', { error: String(error) });
+    }
+  };
+
   const runYahooPriceSyncJob = async () => {
     if (!env.PRICE_SYNC_ENABLED) {
       return;
@@ -148,6 +188,7 @@ export const startScheduler = () => {
   void runAssetSnapshotJob();
   void runServiceHealthJob();
   void runYahooPriceSyncJob();
+  void runDatabaseBackupJob();
 
   const balanceTimer = setInterval(() => {
     void runBalanceJob();
@@ -165,10 +206,15 @@ export const startScheduler = () => {
     void runYahooPriceSyncJob();
   }, env.PRICE_SYNC_TICK_SECONDS * 1000);
 
+  const databaseBackupTimer = setInterval(() => {
+    void runDatabaseBackupJob();
+  }, env.BACKUP_TICK_SECONDS * 1000);
+
   return () => {
     clearInterval(balanceTimer);
     clearInterval(assetSnapshotTimer);
     clearInterval(serviceHealthTimer);
     clearInterval(yahooPriceSyncTimer);
+    clearInterval(databaseBackupTimer);
   };
 };

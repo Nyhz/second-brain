@@ -19,7 +19,9 @@
     "test:packages": "cd packages/types && bun run test && cd ../config && bun run test && cd ../db && bun run test",
     "test:services": "cd services/api && bun run test && cd ../worker && bun run test",
     "db:migrate": "cd packages/db && bun run migrate",
-    "db:seed": "cd packages/db && bun run seed"
+    "db:seed": "cd packages/db && bun run seed",
+    "db:restore": "bun run scripts/db-restore.ts",
+    "db:verify-restore": "bun run scripts/db-verify-restore.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",

@@ -12,6 +12,7 @@ const navItems: NavItem[] = [
   { href: '/accounts', label: 'Accounts' },
   { href: '/transactions', label: 'Transactions' },
   { href: '/taxes', label: 'Taxes' },
+  { href: '/audit', label: 'Audit' },
 ];
 
 type LayoutShellProps = {

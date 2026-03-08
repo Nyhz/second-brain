@@ -122,8 +122,11 @@ export const validateTransactionForm = (
   }
 
   const tradeCurrency = input.tradeCurrency.trim().toUpperCase();
-  if (!['EUR', 'USD'].includes(tradeCurrency)) {
-    return { ok: false, message: 'Trade currency must be EUR or USD.' };
+  if (!/^[A-Z]{3}$/.test(tradeCurrency)) {
+    return {
+      ok: false,
+      message: 'Trade currency must be a 3-letter code.',
+    };
   }
 
   const fxRateToEur = parseOptionalNumber(input.fxRateToEur);

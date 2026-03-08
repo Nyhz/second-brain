@@ -60,6 +60,17 @@ const workerSchema = baseSchema.extend({
     .string()
     .url()
     .default('http://caddy:8080/__caddy/healthz'),
+  BACKUP_ENABLED: z.coerce.boolean().default(true),
+  BACKUP_DIR: z.string().min(1).default('/backups'),
+  BACKUP_TICK_SECONDS: z.coerce.number().int().positive().default(1800),
+  BACKUP_TARGET_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(3),
+  BACKUP_TARGET_MINUTE_UTC: z.coerce
+    .number()
+    .int()
+    .min(0)
+    .max(59)
+    .default(15),
+  BACKUP_RETENTION_COUNT: z.coerce.number().int().positive().default(2),
 });
 
 const appSchema = z.object({

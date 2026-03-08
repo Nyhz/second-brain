@@ -59,13 +59,18 @@ type AssetTransactionRow = {
   unitPrice: string;
   tradeCurrency: string;
   fxRateToEur: string | null;
+  tradeGrossAmount: string;
+  tradeGrossAmountEur: string;
   cashImpactEur: string;
   feesAmount: string;
   feesCurrency: string | null;
+  feesAmountEur: string;
+  netAmountEur: string;
   dividendGross: string | null;
   withholdingTax: string | null;
   dividendNet: string | null;
   externalReference: string | null;
+  source: string | null;
   notes: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -424,6 +429,8 @@ mock.module('@second-brain/db', () => {
                   values.fxRateToEur === undefined
                     ? null
                     : String(values.fxRateToEur),
+                tradeGrossAmount: String(values.tradeGrossAmount ?? '0'),
+                tradeGrossAmountEur: String(values.tradeGrossAmountEur ?? '0'),
                 cashImpactEur: String(values.cashImpactEur ?? '0'),
                 feesAmount: String(values.feesAmount ?? '0'),
                 feesCurrency:
@@ -431,6 +438,8 @@ mock.module('@second-brain/db', () => {
                   values.feesCurrency === undefined
                     ? null
                     : String(values.feesCurrency),
+                feesAmountEur: String(values.feesAmountEur ?? '0'),
+                netAmountEur: String(values.netAmountEur ?? '0'),
                 dividendGross:
                   values.dividendGross === null ||
                   values.dividendGross === undefined
@@ -451,6 +460,10 @@ mock.module('@second-brain/db', () => {
                   values.externalReference === undefined
                     ? null
                     : String(values.externalReference),
+                source:
+                  values.source === null || values.source === undefined
+                    ? null
+                    : String(values.source),
                 notes:
                   values.notes === null || values.notes === undefined
                     ? null
@@ -661,6 +674,67 @@ mock.module('@second-brain/db', () => {
             })),
           );
         }
+        if (
+          text.includes('coalesce(sum(case') &&
+          text.includes('from finances.asset_transactions')
+        ) {
+          const quantity = state.assetTransactions.reduce((sum, row) => {
+            if (row.transactionType === 'buy') {
+              return sum + Number(row.quantity ?? 0);
+            }
+            if (row.transactionType === 'sell') {
+              return sum - Number(row.quantity ?? 0);
+            }
+            return sum;
+          }, 0);
+          return Promise.resolve([{ quantity }]);
+        }
+        if (
+          text.includes('inner join finances.assets a on a.id = at.asset_id') &&
+          text.includes('inner join finances.accounts acc on acc.id = at.account_id')
+        ) {
+          return Promise.resolve(
+            [...state.assetTransactions]
+              .sort((a, b) => {
+                if (a.assetId !== b.assetId) {
+                  return a.assetId.localeCompare(b.assetId);
+                }
+                return a.tradedAt.valueOf() - b.tradedAt.valueOf();
+              })
+              .map((row) => {
+                const asset = state.assets.find((entry) => entry.id === row.assetId);
+                const account = state.accounts.find(
+                  (entry) => entry.id === row.accountId,
+                );
+                return {
+                  id: row.id,
+                  accountId: row.accountId,
+                  accountName: account?.name ?? 'Unknown',
+                  assetId: row.assetId,
+                  assetName: asset?.name ?? 'Unknown',
+                  assetTicker: asset?.ticker ?? 'UNKNOWN',
+                  assetIsin: asset?.isin ?? 'UNKNOWN',
+                  transactionType: row.transactionType,
+                  tradedAt: row.tradedAt,
+                  quantity: row.quantity,
+                  unitPrice: row.unitPrice,
+                  tradeCurrency: row.tradeCurrency,
+                  fxRateToEur: row.fxRateToEur,
+                  tradeGrossAmount: row.tradeGrossAmount,
+                  tradeGrossAmountEur: row.tradeGrossAmountEur,
+                  feesAmount: row.feesAmount,
+                  feesCurrency: row.feesCurrency,
+                  feesAmountEur: row.feesAmountEur,
+                  netAmountEur: row.netAmountEur,
+                  dividendGross: row.dividendGross,
+                  withholdingTax: row.withholdingTax,
+                  dividendNet: row.dividendNet,
+                  externalReference: row.externalReference,
+                  source: row.source,
+                };
+              }),
+          );
+        }
         if (text.includes('with latest as')) {
           const bySymbol = new Map<string, PriceHistoryRow>();
           const sorted = [...state.priceHistory].sort(
@@ -734,6 +808,7 @@ mock.module('@second-brain/db', () => {
     accountCashMovements: accountCashMovementsTable,
     transactionImports: transactionImportsTable,
     transactionImportRows: transactionImportRowsTable,
+    auditEvents: { __table: 'auditEvents', id: { name: 'id' } },
     and,
     eq,
     desc,
@@ -898,6 +973,64 @@ describe('finances routes', () => {
       }),
     );
     expect(missingAccountRes.status).toBe(404);
+  });
+
+  test('preserves high-precision crypto unit prices', async () => {
+    const app = buildApp();
+
+    const createAccountRes = await app.handle(
+      createRequest('/finances/accounts', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Binance',
+          currency: 'EUR',
+          openingBalanceEur: 0,
+          accountType: 'crypto_exchange',
+        }),
+      }),
+    );
+    const account = await parseResponse<{ id: string }>(createAccountRes);
+
+    const createAssetRes = await app.handle(
+      createRequest('/finances/assets', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'PEPE',
+          assetType: 'crypto',
+          ticker: 'PEPE',
+          isin: 'ZZPEPEXXXXXX',
+          symbol: 'PEPE',
+          currency: 'EUR',
+        }),
+      }),
+    );
+    const asset = await parseResponse<{ id: string }>(createAssetRes);
+
+    const createTxRes = await app.handle(
+      createRequest('/finances/asset-transactions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          accountId: account.id,
+          assetType: 'crypto',
+          assetId: asset.id,
+          transactionType: 'buy',
+          tradedAt: '2025-08-09T09:41:48.000Z',
+          quantity: 47119924,
+          unitPrice: 0.0000106,
+          tradeCurrency: 'EUR',
+          feesAmount: 0,
+        }),
+      }),
+    );
+    expect(createTxRes.status).toBe(201);
+    const created = await parseResponse<{ unitPrice: number; tradeGrossAmountEur: number }>(
+      createTxRes,
+    );
+    expect(created.unitPrice).toBe(0.0000106);
+    expect(created.tradeGrossAmountEur).toBe(499.47);
   });
 
   test('accepts short retirement fund code and keeps strict ISIN for stock', async () => {
@@ -1207,13 +1340,18 @@ describe('finances routes', () => {
         unitPrice: '100',
         tradeCurrency: 'EUR',
         fxRateToEur: null,
+        tradeGrossAmount: '500',
+        tradeGrossAmountEur: '500',
         cashImpactEur: '-500',
         feesAmount: '0',
         feesCurrency: null,
+        feesAmountEur: '0',
+        netAmountEur: '500',
         dividendGross: null,
         withholdingTax: null,
         dividendNet: null,
         externalReference: null,
+        source: 'manual',
         notes: null,
         createdAt,
         updatedAt: createdAt,
@@ -1228,13 +1366,18 @@ describe('finances routes', () => {
         unitPrice: '120',
         tradeCurrency: 'EUR',
         fxRateToEur: null,
+        tradeGrossAmount: '240',
+        tradeGrossAmountEur: '240',
         cashImpactEur: '240',
         feesAmount: '0',
         feesCurrency: null,
+        feesAmountEur: '0',
+        netAmountEur: '240',
         dividendGross: null,
         withholdingTax: null,
         dividendNet: null,
         externalReference: null,
+        source: 'manual',
         notes: null,
         createdAt,
         updatedAt: createdAt,
@@ -1271,5 +1414,129 @@ describe('finances routes', () => {
       createRequest('/finances/transactions?limit=10&cursor=2026-01-01T00:00:00.000Z'),
     );
     expect(validRes.status).toBe(200);
+  });
+
+  test('builds yearly tax summary and downloadable PDF with explicit fees', async () => {
+    const app = buildApp();
+
+    const accountRes = await app.handle(
+      createRequest('/finances/accounts', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Broker',
+          currency: 'EUR',
+          openingBalanceEur: 0,
+          accountType: 'brokerage',
+        }),
+      }),
+    );
+    const account = await parseResponse<{ id: string }>(accountRes);
+
+    const assetRes = await app.handle(
+      createRequest('/finances/assets', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Apple',
+          assetType: 'stock',
+          ticker: 'AAPL',
+          isin: 'US0378331005',
+          symbol: 'AAPL',
+          currency: 'EUR',
+        }),
+      }),
+    );
+    const asset = await parseResponse<{ id: string }>(assetRes);
+
+    const buyRes = await app.handle(
+      createRequest('/finances/asset-transactions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          accountId: account.id,
+          assetType: 'stock',
+          assetId: asset.id,
+          transactionType: 'buy',
+          tradedAt: '2026-01-10T10:00:00.000Z',
+          quantity: 2,
+          unitPrice: 100,
+          tradeCurrency: 'EUR',
+          feesAmount: 5,
+          feesCurrency: 'EUR',
+        }),
+      }),
+    );
+    expect(buyRes.status).toBe(201);
+
+    const sellRes = await app.handle(
+      createRequest('/finances/asset-transactions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          accountId: account.id,
+          assetType: 'stock',
+          assetId: asset.id,
+          transactionType: 'sell',
+          tradedAt: '2026-02-10T10:00:00.000Z',
+          quantity: 1,
+          unitPrice: 120,
+          tradeCurrency: 'EUR',
+          feesAmount: 3,
+          feesCurrency: 'EUR',
+        }),
+      }),
+    );
+    expect(sellRes.status).toBe(201);
+
+    const dividendRes = await app.handle(
+      createRequest('/finances/asset-transactions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          accountId: account.id,
+          assetType: 'stock',
+          assetId: asset.id,
+          transactionType: 'dividend',
+          tradedAt: '2026-03-10T10:00:00.000Z',
+          quantity: 0,
+          unitPrice: 0,
+          tradeCurrency: 'EUR',
+          feesAmount: 0,
+          dividendGross: 10,
+          withholdingTax: 1.9,
+          dividendNet: 8.1,
+        }),
+      }),
+    );
+    expect(dividendRes.status).toBe(201);
+
+    const summaryRes = await app.handle(
+      createRequest('/finances/tax/yearly-summary?year=2026'),
+    );
+    expect(summaryRes.status).toBe(200);
+    const summary = await parseResponse<{
+      realizedGainLossEur: number;
+      dividendsNetEur: number;
+      operations: { sells: number; dividends: number; detailedRows: Array<{ proceedsEur: number; costBasisEur: number; realizedGainLossEur: number; feesAmountEur: number }> };
+    }>(summaryRes);
+    expect(summary.realizedGainLossEur).toBe(14.5);
+    expect(summary.dividendsNetEur).toBe(8.1);
+    expect(summary.operations.sells).toBe(1);
+    expect(summary.operations.dividends).toBe(1);
+    expect(summary.operations.detailedRows[0]?.proceedsEur).toBe(117);
+    expect(summary.operations.detailedRows[0]?.costBasisEur).toBe(102.5);
+    expect(summary.operations.detailedRows[0]?.feesAmountEur).toBe(3);
+
+    const reportRes = await app.handle(
+      createRequest('/finances/tax/yearly-report.pdf?year=2026'),
+    );
+    expect(reportRes.status).toBe(200);
+    expect(reportRes.headers.get('content-type')).toBe('application/pdf');
+    const reportText = new TextDecoder('latin1').decode(
+      await reportRes.arrayBuffer(),
+    );
+    expect(reportText.includes('Second Brain Hacienda Report 2026')).toBe(true);
+    expect(reportText.includes('Apple')).toBe(true);
   });
 });

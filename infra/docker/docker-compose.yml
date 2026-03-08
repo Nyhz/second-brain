@@ -57,9 +57,12 @@ services:
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       WORKER_PORT: 3002
+      BACKUP_DIR: /backups
     depends_on:
       migrations:
         condition: service_completed_successfully
+    volumes:
+      - second-brain-postgres-backups:/backups
     healthcheck:
       test: ['CMD-SHELL', 'bun -e "fetch(\"http://localhost:3002/health\").then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"']
       interval: 10s
@@ -130,5 +133,6 @@ services:
 
 volumes:
   second-brain-postgres-data:
+  second-brain-postgres-backups:
   second-brain-caddy-data:
   second-brain-caddy-config:
