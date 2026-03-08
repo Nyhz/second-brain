@@ -48,6 +48,10 @@ import type { Elysia } from 'elysia';
 import { withTimedDb } from '../../lib/db-timed';
 import { ApiHttpError } from '../../lib/errors';
 import { renderPlainTextPdf } from '../../lib/simple-pdf';
+import {
+  buildAccountStatementPdf,
+  buildAccountTransactionLedgerPdf,
+} from './account-pdf';
 import { parseBinanceTransactionsCsv } from './binance-import';
 import { parseCobasTransactionsCsv } from './cobas-import';
 import {
@@ -344,6 +348,38 @@ const isSavingsAccountType = (accountType: string | null | undefined) =>
   accountType === SAVINGS_ACCOUNT_TYPE;
 
 const formatReportMoney = (value: number) => value.toFixed(2);
+const formatDateOnly = (value: Date) => value.toISOString().slice(0, 10);
+
+const filenameSafe = (value: string) =>
+  value
+    .normalize('NFKD')
+    .replace(/[^\w\s-]/g, '')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/-+/g, '-')
+    .toLowerCase();
+
+const startOfUtcMonth = (year: number, month: number) =>
+  new Date(Date.UTC(year, month - 1, 1, 0, 0, 0, 0));
+
+const startOfUtcYear = (year: number) =>
+  new Date(Date.UTC(year, 0, 1, 0, 0, 0, 0));
+
+const addUtcMonths = (value: Date, months: number) =>
+  new Date(
+    Date.UTC(
+      value.getUTCFullYear(),
+      value.getUTCMonth() + months,
+      1,
+      0,
+      0,
+      0,
+      0,
+    ),
+  );
+
+const normalizePeriodMode = (value: unknown) =>
+  value === 'month' || value === 'ytd' ? value : null;
 
 type ImportMovementTable = 'asset_transaction' | 'cash_movement';
 
@@ -761,6 +797,376 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
     }
 
     return Number(row.cash_balance ?? 0);
+  };
+
+  const getAccountById = async (accountId: string) => {
+    const rows = await listAccountsWithCash();
+    const account = rows.find((row) => row.id === accountId);
+    if (!account) {
+      return null;
+    }
+    return {
+      ...account,
+      accountType: account.accountType as Account['accountType'],
+    };
+  };
+
+  const resolveAccountPdfPeriod = (query: Record<string, unknown>) => {
+    const periodMode = normalizePeriodMode(query.periodMode);
+    if (!periodMode) {
+      throw new ApiHttpError(
+        400,
+        'VALIDATION_ERROR',
+        'periodMode must be "month" or "ytd"',
+      );
+    }
+
+    const generatedAt = new Date();
+    if (periodMode === 'ytd') {
+      const year = generatedAt.getUTCFullYear();
+      return {
+        mode: 'ytd' as const,
+        label: `Year to Date ${year}`,
+        start: startOfUtcYear(year),
+        end: generatedAt,
+        generatedAt,
+      };
+    }
+
+    const year = Number(query.year);
+    const month = Number(query.month);
+    if (
+      !Number.isInteger(year) ||
+      year < 2000 ||
+      year > 2100 ||
+      !Number.isInteger(month) ||
+      month < 1 ||
+      month > 12
+    ) {
+      throw new ApiHttpError(
+        400,
+        'VALIDATION_ERROR',
+        'month exports require a valid year and month',
+      );
+    }
+
+    const start = startOfUtcMonth(year, month);
+    const end = addUtcMonths(start, 1);
+    return {
+      mode: 'month' as const,
+      label: `${start.toLocaleString('en-US', {
+        month: 'long',
+        timeZone: 'UTC',
+      })} ${year}`,
+      start,
+      end,
+      generatedAt,
+    };
+  };
+
+  const listUnifiedTransactionsForAccountPeriod = async (
+    accountId: string,
+    start: Date,
+    end: Date,
+  ) => {
+    const rows = await withTimedDb('list_unified_transactions_pdf', async () => {
+      return db.execute(sql`
+        with asset_rows as (
+          select
+            at.id,
+            'asset_transaction'::text as "rowKind",
+            at.account_id as "accountId",
+            at.traded_at as "occurredAt",
+            null::date as "valueDate",
+            at.transaction_type as "transactionType",
+            null::text as "movementType",
+            at.asset_id as "assetId",
+            a.asset_type as "assetType",
+            (coalesce(a.symbol, a.ticker) || ' - ' || a.name)::text as "assetLabel",
+            at.quantity as quantity,
+            at.unit_price as "unitPrice",
+            case
+              when at.transaction_type = 'buy' then -coalesce(at.trade_gross_amount, at.quantity * at.unit_price)
+              when at.transaction_type = 'sell' then coalesce(at.trade_gross_amount, at.quantity * at.unit_price)
+              when at.transaction_type = 'dividend' then coalesce(at.dividend_net, 0)
+              when at.transaction_type = 'fee' then -abs(coalesce(at.fees_amount, 0))
+              else 0
+            end::numeric as "amountNative",
+            at.trade_gross_amount as "tradeGrossAmount",
+            at.trade_currency as currency,
+            at.fx_rate_to_eur as "fxRateToEur",
+            at.cash_impact_eur as "cashImpactEur",
+            at.fees_amount as "feesAmount",
+            at.fees_currency as "feesCurrency",
+            at.fees_amount_eur as "feesAmountEur",
+            at.net_amount_eur as "netAmountEur",
+            at.linked_transaction_id as "linkedTransactionId",
+            at.notes,
+            at.external_reference as "externalReference",
+            at.source
+          from finances.asset_transactions at
+          inner join finances.assets a on a.id = at.asset_id
+          where at.account_id = ${accountId}
+            and at.traded_at >= ${start.toISOString()}
+            and at.traded_at < ${end.toISOString()}
+        ),
+        cash_rows as (
+          select
+            acm.id,
+            'cash_movement'::text as "rowKind",
+            acm.account_id as "accountId",
+            acm.occurred_at as "occurredAt",
+            acm.value_date as "valueDate",
+            null::text as "transactionType",
+            acm.movement_type as "movementType",
+            null::uuid as "assetId",
+            null::text as "assetType",
+            coalesce(acm.description, 'Cash movement') as "assetLabel",
+            null::numeric as quantity,
+            null::numeric as "unitPrice",
+            acm.native_amount as "amountNative",
+            null::numeric as "tradeGrossAmount",
+            acm.currency,
+            acm.fx_rate_to_eur as "fxRateToEur",
+            acm.cash_impact_eur as "cashImpactEur",
+            null::numeric as "feesAmount",
+            null::text as "feesCurrency",
+            null::numeric as "feesAmountEur",
+            null::numeric as "netAmountEur",
+            null::uuid as "linkedTransactionId",
+            acm.description as notes,
+            acm.external_reference as "externalReference",
+            acm.source
+          from finances.account_cash_movements acm
+          where acm.account_id = ${accountId}
+            and acm.occurred_at >= ${start.toISOString()}
+            and acm.occurred_at < ${end.toISOString()}
+        )
+        select *
+        from asset_rows
+        union all
+        select *
+        from cash_rows
+        order by "occurredAt" desc, id desc
+      `);
+    });
+
+    return rows.map(
+      (row): UnifiedTransactionRow => ({
+        id: String(row.id),
+        rowKind: String(row.rowKind) as UnifiedTransactionRow['rowKind'],
+        accountId: String(row.accountId),
+        occurredAt: toIso(row.occurredAt),
+        valueDate:
+          row.valueDate === null || row.valueDate === undefined
+            ? null
+            : String(row.valueDate),
+        transactionType:
+          row.transactionType === null || row.transactionType === undefined
+            ? null
+            : (String(
+                row.transactionType,
+              ) as UnifiedTransactionRow['transactionType']),
+        movementType:
+          row.movementType === null || row.movementType === undefined
+            ? null
+            : String(row.movementType),
+        assetId:
+          row.assetId === null || row.assetId === undefined
+            ? null
+            : String(row.assetId),
+        assetType:
+          row.assetType === null || row.assetType === undefined
+            ? null
+            : (String(row.assetType) as UnifiedTransactionRow['assetType']),
+        assetLabel:
+          row.assetLabel === null || row.assetLabel === undefined
+            ? null
+            : String(row.assetLabel),
+        quantity:
+          row.quantity === null || row.quantity === undefined
+            ? null
+            : Number(row.quantity),
+        unitPrice:
+          row.unitPrice === null || row.unitPrice === undefined
+            ? null
+            : Number(row.unitPrice),
+        amountNative: Number(row.amountNative ?? 0),
+        tradeGrossAmount:
+          row.tradeGrossAmount === null || row.tradeGrossAmount === undefined
+            ? null
+            : Number(row.tradeGrossAmount),
+        currency: String(row.currency ?? 'EUR'),
+        fxRateToEur:
+          row.fxRateToEur === null || row.fxRateToEur === undefined
+            ? null
+            : Number(row.fxRateToEur),
+        cashImpactEur: Number(row.cashImpactEur ?? 0),
+        feesAmount:
+          row.feesAmount === null || row.feesAmount === undefined
+            ? null
+            : Number(row.feesAmount),
+        feesCurrency:
+          row.feesCurrency === null || row.feesCurrency === undefined
+            ? null
+            : String(row.feesCurrency),
+        feesAmountEur:
+          row.feesAmountEur === null || row.feesAmountEur === undefined
+            ? null
+            : Number(row.feesAmountEur),
+        netAmountEur:
+          row.netAmountEur === null || row.netAmountEur === undefined
+            ? null
+            : Number(row.netAmountEur),
+        linkedTransactionId:
+          row.linkedTransactionId === null || row.linkedTransactionId === undefined
+            ? null
+            : String(row.linkedTransactionId),
+        notes:
+          row.notes === null || row.notes === undefined ? null : String(row.notes),
+        externalReference:
+          row.externalReference === null || row.externalReference === undefined
+            ? null
+            : String(row.externalReference),
+        source:
+          row.source === null || row.source === undefined ? null : String(row.source),
+      }),
+    );
+  };
+
+  const getDailyBalanceAtOrBefore = async (accountId: string, cutoff: Date) => {
+    const [row] = await withTimedDb('account_pdf_daily_balance', async () => {
+      return db.execute(sql`
+        select balance
+        from finances.daily_balances
+        where account_id = ${accountId}
+          and balance_date < ${cutoff.toISOString()}
+        order by balance_date desc
+        limit 1
+      `);
+    });
+    return row ? Number(row.balance ?? 0) : null;
+  };
+
+  const listStatementHoldings = async (accountId: string, end: Date) => {
+    const rows = await withTimedDb('account_pdf_holdings', async () => {
+      return db.execute(sql`
+        select
+          at.asset_id as "assetId",
+          a.name as "assetName",
+          a.asset_type as "assetType",
+          coalesce(a.symbol, a.ticker) as symbol,
+          coalesce(
+            sum(
+              case
+                when at.transaction_type = 'buy' then at.quantity
+                when at.transaction_type = 'sell' then -at.quantity
+                else 0
+              end
+            ),
+            0
+          )::numeric as quantity
+        from finances.asset_transactions at
+        inner join finances.assets a on a.id = at.asset_id
+        where at.account_id = ${accountId}
+          and at.traded_at < ${end.toISOString()}
+        group by at.asset_id, a.name, a.asset_type, a.symbol, a.ticker
+        having coalesce(
+          sum(
+            case
+              when at.transaction_type = 'buy' then at.quantity
+              when at.transaction_type = 'sell' then -at.quantity
+              else 0
+            end
+          ),
+          0
+        ) > 0
+        order by a.name asc
+      `);
+    });
+
+    return rows.map((row) => ({
+      assetLabel: `${String(row.symbol ?? '')} - ${String(row.assetName)}`.trim(),
+      assetType: String(row.assetType),
+      quantity: Number(row.quantity ?? 0),
+    }));
+  };
+
+  const summarizeLedgerRows = (rows: UnifiedTransactionRow[]) => {
+    const summary = {
+      transactionCount: rows.length,
+      buyOutflowsEur: 0,
+      sellInflowsEur: 0,
+      feeTotalEur: 0,
+      dividendTotalEur: 0,
+      netCashImpactEur: 0,
+    };
+
+    for (const row of rows) {
+      summary.netCashImpactEur += row.cashImpactEur;
+      if (row.rowKind !== 'asset_transaction') {
+        continue;
+      }
+      if (row.transactionType === 'buy') {
+        summary.buyOutflowsEur += Math.abs(row.cashImpactEur);
+      } else if (row.transactionType === 'sell') {
+        summary.sellInflowsEur += Math.max(0, row.cashImpactEur);
+      } else if (row.transactionType === 'fee') {
+        summary.feeTotalEur += Math.abs(row.feesAmountEur ?? row.cashImpactEur);
+      } else if (row.transactionType === 'dividend') {
+        summary.dividendTotalEur += Math.max(0, row.cashImpactEur);
+      }
+    }
+
+    return {
+      ...summary,
+      netCashImpactEur: round2(summary.netCashImpactEur),
+      buyOutflowsEur: round2(summary.buyOutflowsEur),
+      sellInflowsEur: round2(summary.sellInflowsEur),
+      feeTotalEur: round2(summary.feeTotalEur),
+      dividendTotalEur: round2(summary.dividendTotalEur),
+    };
+  };
+
+  const summarizeStatementRows = (
+    rows: UnifiedTransactionRow[],
+    balances: { openingBalanceEur: number | null; closingBalanceEur: number | null },
+  ) => {
+    const summary = {
+      transactionCount: rows.length,
+      openingBalanceEur: balances.openingBalanceEur,
+      closingBalanceEur: balances.closingBalanceEur,
+      inflowsEur: 0,
+      outflowsEur: 0,
+      feesEur: 0,
+      dividendsEur: 0,
+      netCashImpactEur: 0,
+    };
+
+    for (const row of rows) {
+      if (row.cashImpactEur >= 0) {
+        summary.inflowsEur += row.cashImpactEur;
+      } else {
+        summary.outflowsEur += Math.abs(row.cashImpactEur);
+      }
+      summary.netCashImpactEur += row.cashImpactEur;
+
+      if (row.rowKind === 'asset_transaction' && row.transactionType === 'fee') {
+        summary.feesEur += Math.abs(row.feesAmountEur ?? row.cashImpactEur);
+      }
+      if (row.rowKind === 'asset_transaction' && row.transactionType === 'dividend') {
+        summary.dividendsEur += Math.max(0, row.cashImpactEur);
+      }
+    }
+
+    return {
+      ...summary,
+      inflowsEur: round2(summary.inflowsEur),
+      outflowsEur: round2(summary.outflowsEur),
+      feesEur: round2(summary.feesEur),
+      dividendsEur: round2(summary.dividendsEur),
+      netCashImpactEur: round2(summary.netCashImpactEur),
+    };
   };
 
   const createAssetTransactionRecord = async (
@@ -1225,6 +1631,98 @@ export const registerFinancesRoutes = (app: Elysia, databaseUrl: string) => {
 
   app.get('/finances/accounts', async () => {
     return listAccountsWithCash();
+  });
+
+  app.get('/finances/accounts/:id/transaction-ledger.pdf', async ({ params, query }) => {
+    if (!UUID_RE.test(params.id)) {
+      throw new ApiHttpError(400, 'VALIDATION_ERROR', 'Account id must be a UUID');
+    }
+
+    const account = await getAccountById(params.id);
+    if (!account) {
+      throw new ApiHttpError(404, 'ACCOUNT_NOT_FOUND', 'Account does not exist');
+    }
+
+    const period = resolveAccountPdfPeriod(query as Record<string, unknown>);
+    const rows = await listUnifiedTransactionsForAccountPeriod(
+      account.id,
+      period.start,
+      period.end,
+    );
+    const summary = summarizeLedgerRows(rows);
+    const bytes = buildAccountTransactionLedgerPdf({
+      account,
+      period: {
+        label: period.label,
+        mode: period.mode,
+        startIso: period.start.toISOString(),
+        endIso: period.end.toISOString(),
+        generatedAtIso: period.generatedAt.toISOString(),
+      },
+      rows,
+      summary,
+    });
+
+    const filename = `${filenameSafe(account.name)}-${
+      period.mode === 'month' ? formatDateOnly(period.start) : 'ytd'
+    }-ledger.pdf`;
+
+    return new Response(bytes, {
+      headers: {
+        'content-type': 'application/pdf',
+        'content-disposition': `attachment; filename="${filename}"`,
+      },
+    });
+  });
+
+  app.get('/finances/accounts/:id/statement.pdf', async ({ params, query }) => {
+    if (!UUID_RE.test(params.id)) {
+      throw new ApiHttpError(400, 'VALIDATION_ERROR', 'Account id must be a UUID');
+    }
+
+    const account = await getAccountById(params.id);
+    if (!account) {
+      throw new ApiHttpError(404, 'ACCOUNT_NOT_FOUND', 'Account does not exist');
+    }
+
+    const period = resolveAccountPdfPeriod(query as Record<string, unknown>);
+    const rows = await listUnifiedTransactionsForAccountPeriod(
+      account.id,
+      period.start,
+      period.end,
+    );
+    const [openingBalanceEur, closingBalanceEur, holdings] = await Promise.all([
+      getDailyBalanceAtOrBefore(account.id, period.start),
+      getDailyBalanceAtOrBefore(account.id, period.end),
+      listStatementHoldings(account.id, period.end),
+    ]);
+    const summary = summarizeStatementRows(rows, {
+      openingBalanceEur,
+      closingBalanceEur,
+    });
+    const bytes = buildAccountStatementPdf({
+      account,
+      period: {
+        label: period.label,
+        mode: period.mode,
+        startIso: period.start.toISOString(),
+        endIso: period.end.toISOString(),
+        generatedAtIso: period.generatedAt.toISOString(),
+      },
+      rows,
+      summary,
+      holdings,
+    });
+    const filename = `${filenameSafe(account.name)}-${
+      period.mode === 'month' ? formatDateOnly(period.start) : 'ytd'
+    }-statement.pdf`;
+
+    return new Response(bytes, {
+      headers: {
+        'content-type': 'application/pdf',
+        'content-disposition': `attachment; filename="${filename}"`,
+      },
+    });
   });
 
   app.get('/finances/audit-events', async ({ query }) => {

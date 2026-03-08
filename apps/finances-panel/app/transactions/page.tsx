@@ -5,8 +5,8 @@ import {
   type TimelineFilterOption,
 } from '../../components/features/transactions/transactions-shared';
 import { prettyAssetType } from '../../lib/display';
+import { clampPage, resolvePageSize } from '../../lib/pagination';
 import {
-  loadServerAccountsData,
   loadServerAssetsData,
   loadServerTransactionsData,
 } from '../../lib/data/server-data';
@@ -26,8 +26,7 @@ export default async function TransactionsPage({
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const resolvedSearchParams = (await searchParams) ?? {};
-  const [accountsData, assetsData, transactionsData] = await Promise.all([
-    loadServerAccountsData().catch(() => ({ rows: [] })),
+  const [assetsData, transactionsData] = await Promise.all([
     loadServerAssetsData().catch(() => ({ rows: [], holdingsByAssetId: {} })),
     loadServerTransactionsData().catch(() => ({ rows: [] })),
   ]);
@@ -36,13 +35,11 @@ export default async function TransactionsPage({
   const assetFilter = getSingleSearchParam(resolvedSearchParams.asset) ?? 'all';
   const assetTypeFilter =
     getSingleSearchParam(resolvedSearchParams.assetType) ?? 'all';
-  const pageSizeParam = Number(
-    getSingleSearchParam(resolvedSearchParams.pageSize) ?? '25',
+  const pageSize = resolvePageSize(
+    getSingleSearchParam(resolvedSearchParams.pageSize),
+    [10, 25, 50],
+    25,
   );
-  const pageParam = Number(
-    getSingleSearchParam(resolvedSearchParams.page) ?? '1',
-  );
-  const pageSize = [10, 25, 50].includes(pageSizeParam) ? pageSizeParam : 25;
 
   const allRows = transactionsData.rows;
   const assetNameById = Object.fromEntries(
@@ -99,9 +96,7 @@ export default async function TransactionsPage({
   });
 
   const totalPages = Math.max(1, Math.ceil(filteredRows.length / pageSize));
-  const page = Number.isFinite(pageParam)
-    ? Math.min(Math.max(1, pageParam), totalPages)
-    : 1;
+  const page = clampPage(getSingleSearchParam(resolvedSearchParams.page), totalPages);
   const start = (page - 1) * pageSize;
   const paginatedRows = filteredRows.slice(start, start + pageSize);
 
@@ -119,8 +114,6 @@ export default async function TransactionsPage({
 
   return (
     <TransactionsFeature
-      accounts={accountsData.rows}
-      assets={assetsData.rows}
       assetNameById={assetNameById}
       assetTypeFilter={assetTypeFilter}
       assetTypeFilterOptions={assetTypeFilterOptions}

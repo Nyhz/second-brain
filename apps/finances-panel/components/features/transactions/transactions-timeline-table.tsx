@@ -2,10 +2,10 @@
 
 import type { UnifiedTransactionRow } from '@second-brain/types';
 import { prettyAssetType } from '../../../lib/display';
-import { formatDateTime, formatMoney } from '../../../lib/format';
+import { formatDateTime, formatMoney, formatMoneyByCurrency } from '../../../lib/format';
 import { Button } from '../../ui/button';
 import { DataTable } from '../../ui/data-table';
-import { prettyTxType } from './transactions-shared';
+import { getTransactionFeeLabel, prettyTxType } from './transactions-shared';
 
 const formatAmountWithCurrency = (
   amount: number | null,
@@ -14,7 +14,12 @@ const formatAmountWithCurrency = (
   if (amount === null || amount === undefined || !Number.isFinite(amount)) {
     return '-';
   }
-  return `${amount.toFixed(4)} ${currency}`;
+  const normalizedCurrency = currency.trim().toUpperCase();
+  const decimals = normalizedCurrency === 'EUR' || normalizedCurrency === 'USD' ? 2 : 4;
+  return formatMoneyByCurrency(amount, normalizedCurrency, {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  });
 };
 
 export function TransactionsTimelineTable({
@@ -74,6 +79,16 @@ export function TransactionsTimelineTable({
           render: (row: UnifiedTransactionRow) => (
             <span className="sb-sensitive-value">
               {formatMoney(row.cashImpactEur)}
+            </span>
+          ),
+        },
+        {
+          key: 'fee',
+          header: 'Fee',
+          sortValue: (row: UnifiedTransactionRow) => row.feesAmountEur ?? null,
+          render: (row: UnifiedTransactionRow) => (
+            <span className="sb-sensitive-value">
+              {getTransactionFeeLabel(row)}
             </span>
           ),
         },

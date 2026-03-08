@@ -6,6 +6,11 @@ import { useState } from 'react';
 import { useRefreshMutation } from '../../../lib/use-refresh-mutation';
 import { Button } from '../../ui/button';
 import { ErrorState } from '../../ui/states';
+import {
+  canCreateTransactionsForAccount,
+  getAllowedImportSourcesForAccount,
+  type ImportSource,
+} from './transactions-shared';
 
 const TransactionsCreateModal = dynamic(
   () =>
@@ -26,29 +31,48 @@ const TransactionsImportModal = dynamic(
 export function TransactionsHeaderActions({
   accounts,
   assets,
+  defaultAccountId,
+  lockAccountId = false,
 }: {
   accounts: Account[];
   assets: AssetWithPosition[];
+  defaultAccountId?: string;
+  lockAccountId?: boolean;
 }) {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [isImportModalOpen, setIsImportModalOpen] = useState(false);
   const { errorMessage, run, setErrorMessage } = useRefreshMutation();
+  const selectedAccount =
+    accounts.find((account) => account.id === defaultAccountId) ?? null;
+  const canCreate = selectedAccount
+    ? canCreateTransactionsForAccount(selectedAccount)
+    : true;
+  const allowedImportSources: ImportSource[] = selectedAccount
+    ? getAllowedImportSourcesForAccount(selectedAccount)
+    : ['degiro', 'binance', 'cobas'];
+  const canImport = allowedImportSources.length > 0;
 
   return (
     <>
       <div className="flex flex-wrap gap-2">
-        <Button variant="secondary" onClick={() => setIsImportModalOpen(true)}>
-          Import CSV
-        </Button>
-        <Button variant="primary" onClick={() => setIsCreateModalOpen(true)}>
-          Create Transaction
-        </Button>
+        {canImport ? (
+          <Button variant="secondary" onClick={() => setIsImportModalOpen(true)}>
+            Import CSV
+          </Button>
+        ) : null}
+        {canCreate ? (
+          <Button variant="primary" onClick={() => setIsCreateModalOpen(true)}>
+            Create Transaction
+          </Button>
+        ) : null}
       </div>
       {errorMessage ? <ErrorState message={errorMessage} /> : null}
       {isCreateModalOpen ? (
         <TransactionsCreateModal
           accounts={accounts}
           assets={assets}
+          {...(defaultAccountId ? { defaultAccountId } : {})}
+          lockAccountId={lockAccountId}
           open={isCreateModalOpen}
           onClose={() => setIsCreateModalOpen(false)}
           onCreated={async () => {
@@ -64,6 +88,9 @@ export function TransactionsHeaderActions({
       {isImportModalOpen ? (
         <TransactionsImportModal
           accounts={accounts}
+          allowedSources={allowedImportSources}
+          {...(defaultAccountId ? { defaultAccountId } : {})}
+          lockAccountId={lockAccountId}
           open={isImportModalOpen}
           onClose={() => setIsImportModalOpen(false)}
           onError={setErrorMessage}

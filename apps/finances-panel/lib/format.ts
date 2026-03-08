@@ -4,6 +4,7 @@ const currencyFormatter = new Intl.NumberFormat('en-US', {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2,
 });
+const currencyFormatters = new Map<string, Intl.NumberFormat>();
 
 const integerFormatter = new Intl.NumberFormat('en-US');
 const MADRID_TIME_ZONE = 'Europe/Madrid';
@@ -29,6 +30,28 @@ const madridOffsetFormatter = new Intl.DateTimeFormat('en-US', {
 
 export const formatMoney = (value: number): string => {
   return currencyFormatter.format(value);
+};
+
+export const formatMoneyByCurrency = (
+  value: number,
+  currency: string,
+  options?: { minimumFractionDigits?: number; maximumFractionDigits?: number },
+): string => {
+  const normalizedCurrency = currency.trim().toUpperCase();
+  const minimumFractionDigits = options?.minimumFractionDigits ?? 2;
+  const maximumFractionDigits = options?.maximumFractionDigits ?? 2;
+  const key = `${normalizedCurrency}:${minimumFractionDigits}:${maximumFractionDigits}`;
+  let formatter = currencyFormatters.get(key);
+  if (!formatter) {
+    formatter = new Intl.NumberFormat('en-US', {
+      style: 'currency',
+      currency: normalizedCurrency,
+      minimumFractionDigits,
+      maximumFractionDigits,
+    });
+    currencyFormatters.set(key, formatter);
+  }
+  return formatter.format(value);
 };
 
 export const formatInteger = (value: number): string => {

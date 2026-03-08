@@ -8,6 +8,7 @@ import type {
   UnifiedTransactionRow,
 } from '@second-brain/types';
 import type { TransactionFormInput } from '../../../lib/transactions';
+import { formatMoney } from '../../../lib/format';
 import { prettyAssetType, toLabel } from '../../../lib/display';
 
 export type ImportSource = 'degiro' | 'binance' | 'cobas';
@@ -60,6 +61,24 @@ export const isInvestmentAccount = (account: Account) =>
   account.accountType === 'investment_platform' ||
   account.accountType === 'retirement_plan';
 
+export const canCreateTransactionsForAccount = (account: Account) =>
+  isInvestmentAccount(account) || account.accountType === 'savings';
+
+export const getAllowedImportSourcesForAccount = (
+  account: Account,
+): ImportSource[] => {
+  if (account.accountType === 'brokerage') {
+    return ['degiro'];
+  }
+  if (account.accountType === 'crypto_exchange') {
+    return ['binance'];
+  }
+  if (account.accountType === 'investment_platform') {
+    return ['cobas'];
+  }
+  return [];
+};
+
 export const getRowTypeKey = (row: UnifiedTransactionRow) =>
   row.rowKind === 'asset_transaction'
     ? `tx:${row.transactionType ?? 'unknown'}`
@@ -70,4 +89,11 @@ export const getRowTypeLabel = (row: UnifiedTransactionRow) => {
     return toLabel(row.transactionType ?? 'Unknown');
   }
   return toLabel(row.movementType ?? 'Cash Movement');
+};
+
+export const getTransactionFeeLabel = (row: UnifiedTransactionRow) => {
+  if (!row.feesAmountEur) {
+    return '-';
+  }
+  return formatMoney(row.feesAmountEur);
 };

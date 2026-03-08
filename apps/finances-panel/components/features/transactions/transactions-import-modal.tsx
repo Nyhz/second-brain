@@ -7,6 +7,7 @@ import { getApiErrorMessage } from '../../../lib/errors';
 import { Button } from '../../ui/button';
 import { Modal } from '../../ui/modal';
 import {
+  getAllowedImportSourcesForAccount,
   type ImportSource,
   isInvestmentAccount,
   type TransactionsImportResult,
@@ -14,19 +15,37 @@ import {
 
 export function TransactionsImportModal({
   accounts,
+  allowedSources,
+  defaultAccountId,
+  lockAccountId = false,
   onClose,
   onError,
   onImported,
   open,
 }: {
   accounts: Account[];
+  allowedSources?: ImportSource[];
+  defaultAccountId?: string;
+  lockAccountId?: boolean;
   onClose: () => void;
   onError: (message: string) => void;
   onImported: () => Promise<void>;
   open: boolean;
 }) {
-  const [importSource, setImportSource] = useState<ImportSource>('degiro');
-  const [importAccountId, setImportAccountId] = useState('');
+  const defaultAccount = useMemo(
+    () => accounts.find((account) => account.id === defaultAccountId) ?? null,
+    [accounts, defaultAccountId],
+  );
+  const sourceOptions = useMemo(() => {
+    const base = allowedSources ?? (defaultAccount
+      ? getAllowedImportSourcesForAccount(defaultAccount)
+      : ['degiro', 'binance', 'cobas']);
+    return base;
+  }, [allowedSources, defaultAccount]);
+  const [importSource, setImportSource] = useState<ImportSource>(
+    sourceOptions[0] ?? 'degiro',
+  );
+  const [importAccountId, setImportAccountId] = useState(defaultAccountId ?? '');
   const [importDryRun, setImportDryRun] = useState(true);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importResult, setImportResult] =
@@ -62,11 +81,24 @@ export function TransactionsImportModal({
   );
 
   useEffect(() => {
+    const nextSource = sourceOptions[0] ?? 'degiro';
+    if (!sourceOptions.includes(importSource)) {
+      setImportSource(nextSource);
+    }
+  }, [importSource, sourceOptions]);
+
+  useEffect(() => {
+    if (defaultAccountId) {
+      setImportAccountId(defaultAccountId);
+    }
+  }, [defaultAccountId]);
+
+  useEffect(() => {
     const defaultImportAccountId = importAccounts[0]?.id ?? '';
     if (!importAccounts.some((account) => account.id === importAccountId)) {
-      setImportAccountId(defaultImportAccountId);
+      setImportAccountId(defaultAccountId ?? defaultImportAccountId);
     }
-  }, [importAccountId, importAccounts]);
+  }, [defaultAccountId, importAccountId, importAccounts]);
 
   const failedImportRows = importResult
     ? importResult.results.filter((row) => row.status === 'failed').slice(0, 8)
@@ -153,10 +185,17 @@ export function TransactionsImportModal({
               setImportSource(event.target.value as ImportSource);
               setImportResult(null);
             }}
+            disabled={sourceOptions.length <= 1}
           >
-            <option value="degiro">DEGIRO</option>
-            <option value="binance">Binance</option>
-            <option value="cobas">COBAS</option>
+            {sourceOptions.includes('degiro') ? (
+              <option value="degiro">DEGIRO</option>
+            ) : null}
+            {sourceOptions.includes('binance') ? (
+              <option value="binance">Binance</option>
+            ) : null}
+            {sourceOptions.includes('cobas') ? (
+              <option value="cobas">COBAS</option>
+            ) : null}
           </select>
         </div>
 
@@ -170,6 +209,7 @@ export function TransactionsImportModal({
             value={importAccountId}
             onChange={(event) => setImportAccountId(event.target.value)}
             required
+            disabled={lockAccountId}
           >
             <option value="">
               {importSource === 'degiro'

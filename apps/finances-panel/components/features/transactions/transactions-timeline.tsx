@@ -1,7 +1,7 @@
 'use client';
 
 import type { UnifiedTransactionRow } from '@second-brain/types';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { usePathname, useRouter, useSearchParams } from 'next/navigation';
 import { useMemo, useState } from 'react';
 import { apiRequest } from '../../../lib/api';
 import { formatDateTime } from '../../../lib/format';
@@ -21,11 +21,17 @@ type TransactionsTimelineProps = {
   assetFilterOptions: TimelineFilterOption[];
   page: number;
   pageSize: number;
+  pageParamName?: string;
+  pageSizeParamName?: string;
   rows: UnifiedTransactionRow[];
   totalPages: number;
   totalRows: number;
+  title?: string;
   typeFilter: string;
   typeFilterOptions: TimelineFilterOption[];
+  showFilters?: boolean;
+  emptyMessage?: string;
+  wrapInCard?: boolean;
 };
 
 export function TransactionsTimeline({
@@ -36,12 +42,19 @@ export function TransactionsTimeline({
   assetFilterOptions,
   page,
   pageSize,
+  pageParamName = 'page',
+  pageSizeParamName = 'pageSize',
   rows,
   totalPages,
   totalRows,
+  title = 'Transactions Timeline',
   typeFilter,
   typeFilterOptions,
+  showFilters = true,
+  emptyMessage = 'No transactions for the selected filters.',
+  wrapInCard = true,
 }: TransactionsTimelineProps) {
+  const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
   const [confirmDeleteTransaction, setConfirmDeleteTransaction] =
@@ -74,10 +87,11 @@ export function TransactionsTimeline({
         params.set(key, value);
       }
     }
-    if (!nextValues.page) {
-      params.delete('page');
+    if (!nextValues[pageParamName]) {
+      params.delete(pageParamName);
     }
-    router.replace(`/transactions?${params.toString()}`, { scroll: false });
+    const nextPath = params.size > 0 ? `${pathname}?${params.toString()}` : pathname;
+    router.replace(nextPath, { scroll: false });
   };
 
   const confirmDelete = async () => {
@@ -97,81 +111,86 @@ export function TransactionsTimeline({
     );
   };
 
-  return (
-    <Card title="Transactions Timeline">
-      <div className="mb-4 grid gap-3 md:grid-cols-3">
-        <div className="grid gap-1.5">
-          <label
-            className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
-            htmlFor="timeline-filter-type"
-          >
-            Type
-          </label>
-          <select
-            id="timeline-filter-type"
-            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-            value={typeFilter}
-            onChange={(event) =>
-              updateSearch({ type: event.target.value, page: '1' })
-            }
-          >
-            {typeFilterOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
+  const content = (
+    <>
+      {showFilters ? (
+        <div className="mb-4 grid gap-3 md:grid-cols-3">
+          <div className="grid gap-1.5">
+            <label
+              className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+              htmlFor="timeline-filter-type"
+            >
+              Type
+            </label>
+            <select
+              id="timeline-filter-type"
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={typeFilter}
+              onChange={(event) =>
+                updateSearch({ type: event.target.value, [pageParamName]: '1' })
+              }
+            >
+              {typeFilterOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid gap-1.5">
+            <label
+              className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+              htmlFor="timeline-filter-asset"
+            >
+              Asset
+            </label>
+            <select
+              id="timeline-filter-asset"
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={assetFilter}
+              onChange={(event) =>
+                updateSearch({ asset: event.target.value, [pageParamName]: '1' })
+              }
+            >
+              {assetFilterOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid gap-1.5">
+            <label
+              className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
+              htmlFor="timeline-filter-asset-type"
+            >
+              Asset Type
+            </label>
+            <select
+              id="timeline-filter-asset-type"
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+              value={assetTypeFilter}
+              onChange={(event) =>
+                updateSearch({
+                  assetType: event.target.value,
+                  [pageParamName]: '1',
+                })
+              }
+            >
+              {assetTypeFilterOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
         </div>
-        <div className="grid gap-1.5">
-          <label
-            className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
-            htmlFor="timeline-filter-asset"
-          >
-            Asset
-          </label>
-          <select
-            id="timeline-filter-asset"
-            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-            value={assetFilter}
-            onChange={(event) =>
-              updateSearch({ asset: event.target.value, page: '1' })
-            }
-          >
-            {assetFilterOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="grid gap-1.5">
-          <label
-            className="text-xs font-medium uppercase tracking-wide text-muted-foreground"
-            htmlFor="timeline-filter-asset-type"
-          >
-            Asset Type
-          </label>
-          <select
-            id="timeline-filter-asset-type"
-            className="rounded-md border border-input bg-background px-3 py-2 text-sm"
-            value={assetTypeFilter}
-            onChange={(event) =>
-              updateSearch({ assetType: event.target.value, page: '1' })
-            }
-          >
-            {assetTypeFilterOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </div>
-      </div>
+      ) : null}
 
       {errorMessage ? <ErrorState message={errorMessage} /> : null}
 
       {rows.length === 0 ? (
-        <EmptyState message="No transactions for the selected filters." />
+        <EmptyState message={emptyMessage} />
       ) : (
         <>
           <TransactionsTimelineTable
@@ -199,7 +218,10 @@ export function TransactionsTimeline({
                 className="rounded-md border border-input bg-background px-2 py-1 text-sm"
                 value={pageSize}
                 onChange={(event) =>
-                  updateSearch({ pageSize: event.target.value, page: '1' })
+                  updateSearch({
+                    [pageSizeParamName]: event.target.value,
+                    [pageParamName]: '1',
+                  })
                 }
               >
                 <option value={10}>10</option>
@@ -212,7 +234,9 @@ export function TransactionsTimeline({
                 variant="secondary"
                 disabled={page <= 1}
                 onClick={() =>
-                  updateSearch({ page: String(Math.max(1, page - 1)) })
+                  updateSearch({
+                    [pageParamName]: String(Math.max(1, page - 1)),
+                  })
                 }
               >
                 Previous
@@ -226,7 +250,9 @@ export function TransactionsTimeline({
                 variant="secondary"
                 disabled={page >= totalPages}
                 onClick={() =>
-                  updateSearch({ page: String(Math.min(totalPages, page + 1)) })
+                  updateSearch({
+                    [pageParamName]: String(Math.min(totalPages, page + 1)),
+                  })
                 }
               >
                 Next
@@ -252,6 +278,12 @@ export function TransactionsTimeline({
         onCancel={() => setConfirmDeleteTransaction(null)}
         onConfirm={() => void confirmDelete()}
       />
-    </Card>
+    </>
   );
+
+  if (!wrapInCard) {
+    return content;
+  }
+
+  return <Card title={title}>{content}</Card>;
 }

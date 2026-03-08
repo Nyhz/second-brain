@@ -2,14 +2,18 @@
 
 import dynamic from 'next/dynamic';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import type { Account, AssetWithPosition, UnifiedTransactionRow } from '@second-brain/types';
 import type { OverviewRange, OverviewState } from '../../../lib/dashboard-types';
 import { loadOverview } from '../../../lib/data/overview-data';
 import { accountTypeLabel } from '../../../lib/display';
 import { getApiErrorMessage } from '../../../lib/errors';
 import { formatDateTime, formatMoney } from '../../../lib/format';
 import { cn } from '../../../lib/utils';
+import { AccountProfileExportModal } from './account-profile-export-modal';
+import { TransactionsHeaderActions } from '../transactions/transactions-header-actions';
 import { Button } from '../../ui/button';
 import { Card } from '../../ui/card';
+import { CollapsibleCard } from '../../ui/collapsible-card';
 import { KpiCard } from '../../ui/kpi-card';
 import { EmptyState, ErrorState, LoadingSkeleton } from '../../ui/states';
 
@@ -27,6 +31,16 @@ const AccountProfilePositionsTable = dynamic(
   () =>
     import('./account-profile-positions-table').then((module) => ({
       default: module.AccountProfilePositionsTable,
+    })),
+  {
+    loading: () => <LoadingSkeleton lines={7} />,
+  },
+);
+
+const TransactionsTimeline = dynamic(
+  () =>
+    import('../transactions/transactions-timeline').then((module) => ({
+      default: module.TransactionsTimeline,
     })),
   {
     loading: () => <LoadingSkeleton lines={7} />,
@@ -54,12 +68,26 @@ const labelForPoint = (iso: string, range: OverviewRange) => {
 
 type AccountProfileFeatureProps = {
   accountId: string;
+  accounts: Account[];
+  assets: AssetWithPosition[];
   initialData?: OverviewState;
+  initialTransactions?: UnifiedTransactionRow[];
+  transactionsPage: number;
+  transactionsPageSize: number;
+  transactionsTotalPages: number;
+  transactionsTotalRows: number;
 };
 
 export function AccountProfileFeature({
   accountId,
+  accounts,
+  assets,
   initialData,
+  initialTransactions = [],
+  transactionsPage,
+  transactionsPageSize,
+  transactionsTotalPages,
+  transactionsTotalRows,
 }: AccountProfileFeatureProps) {
   const [data, setData] = useState<OverviewState | null>(initialData ?? null);
   const [isLoading, setIsLoading] = useState(initialData === undefined);
@@ -106,6 +134,14 @@ export function AccountProfileFeature({
       dateIso: point.tsIso,
     }));
   }, [data]);
+
+  const accountAssetNameById = useMemo(
+    () =>
+      Object.fromEntries(
+        data?.positions.map((position) => [position.assetId, position.name]) ?? [],
+      ),
+    [data],
+  );
 
   const allocationByAsset = useMemo(() => {
     if (!data) return [];
@@ -166,27 +202,38 @@ export function AccountProfileFeature({
             {formatDateTime(data.asOfIso)}
           </p>
         </div>
-        <div className="space-y-2">
-          <p className="text-[11px] font-medium uppercase tracking-[0.13em] text-muted-foreground">
-            Range
-          </p>
-          <div className="flex flex-wrap gap-2">
-            {RANGES.map((range) => (
-              <Button
-                type="button"
-                size="sm"
-                variant="secondary"
-                key={range}
-                className={cn(
-                  'h-8 rounded-md border-border/70 bg-card/70 px-3 text-xs text-muted-foreground hover:bg-muted hover:text-foreground',
-                  data.range === range && 'bg-muted text-foreground',
-                )}
-                onClick={() => void load(range)}
-                disabled={isLoading}
-              >
-                {range}
-              </Button>
-            ))}
+        <div className="flex flex-col gap-3 xl:items-end">
+          <div className="flex flex-wrap justify-end gap-2">
+            <TransactionsHeaderActions
+              accounts={accounts}
+              assets={assets}
+              defaultAccountId={accountId}
+              lockAccountId
+            />
+            <AccountProfileExportModal accountId={accountId} />
+          </div>
+          <div className="space-y-2">
+            <p className="text-[11px] font-medium uppercase tracking-[0.13em] text-muted-foreground">
+              Range
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {RANGES.map((range) => (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  key={range}
+                  className={cn(
+                    'h-8 rounded-md border-border/70 bg-card/70 px-3 text-xs text-muted-foreground hover:bg-muted hover:text-foreground',
+                    data.range === range && 'bg-muted text-foreground',
+                  )}
+                  onClick={() => void load(range)}
+                  disabled={isLoading}
+                >
+                  {range}
+                </Button>
+              ))}
+            </div>
           </div>
         </div>
       </header>
@@ -229,7 +276,7 @@ export function AccountProfileFeature({
       </Card>
 
       <section className="grid gap-4">
-        <Card title="Allocation by Asset">
+        <CollapsibleCard title="Allocation by Asset">
           {allocationByAsset.length === 0 ? (
             <EmptyState message="No positions available for asset allocation." />
           ) : (
@@ -259,16 +306,38 @@ export function AccountProfileFeature({
               ))}
             </div>
           )}
-        </Card>
+        </CollapsibleCard>
       </section>
 
-      <Card title="Positions">
+      <CollapsibleCard title="Positions">
         {data.positions.length === 0 ? (
           <EmptyState message="No open positions for this account." />
         ) : (
           <AccountProfilePositionsTable rows={data.positions} />
         )}
-      </Card>
+      </CollapsibleCard>
+
+      <CollapsibleCard title="Transactions">
+        <TransactionsTimeline
+          assetNameById={accountAssetNameById}
+          assetTypeFilter="all"
+          assetTypeFilterOptions={[]}
+          assetFilter="all"
+          assetFilterOptions={[]}
+          page={transactionsPage}
+          pageParamName="txPage"
+          pageSize={transactionsPageSize}
+          pageSizeParamName="txPageSize"
+          rows={initialTransactions}
+          showFilters={false}
+          totalPages={transactionsTotalPages}
+          totalRows={transactionsTotalRows}
+          typeFilter="all"
+          typeFilterOptions={[]}
+          emptyMessage="No transactions for this account."
+          wrapInCard={false}
+        />
+      </CollapsibleCard>
     </div>
   );
 }

@@ -28,6 +28,8 @@ import {
 export function TransactionsCreateModal({
   accounts,
   assets,
+  defaultAccountId,
+  lockAccountId = false,
   onClose,
   onCreated,
   onError,
@@ -35,16 +37,26 @@ export function TransactionsCreateModal({
 }: {
   accounts: Account[];
   assets: AssetWithPosition[];
+  defaultAccountId?: string;
+  lockAccountId?: boolean;
   onClose: () => void;
   onCreated: () => Promise<void>;
   onError: (message: string) => void;
   open: boolean;
 }) {
+  const defaultAccount = useMemo(
+    () => accounts.find((account) => account.id === defaultAccountId) ?? null,
+    [accounts, defaultAccountId],
+  );
+  const defaultCreateMode: TransactionCreateMode =
+    defaultAccount?.accountType === 'savings' ? 'deposit' : 'asset_transaction';
   const [isSaving, setIsSaving] = useState(false);
   const [createMode, setCreateMode] =
-    useState<TransactionCreateMode>('asset_transaction');
+    useState<TransactionCreateMode>(defaultCreateMode);
   const [depositAmount, setDepositAmount] = useState('0');
-  const [form, setForm] = useState<TransactionFormInput>(initialForm());
+  const [form, setForm] = useState<TransactionFormInput>(
+    initialForm(defaultAccountId ?? ''),
+  );
 
   const investmentAccounts = useMemo(
     () => accounts.filter(isInvestmentAccount),
@@ -55,8 +67,15 @@ export function TransactionsCreateModal({
     [accounts],
   );
   const createAccounts = useMemo(
-    () => (createMode === 'deposit' ? savingsAccounts : investmentAccounts),
-    [createMode, investmentAccounts, savingsAccounts],
+    () => {
+      const available =
+        createMode === 'deposit' ? savingsAccounts : investmentAccounts;
+      if (!defaultAccountId) {
+        return available;
+      }
+      return available.filter((account) => account.id === defaultAccountId);
+    },
+    [createMode, defaultAccountId, investmentAccounts, savingsAccounts],
   );
   const filteredAssets = useMemo(
     () =>
@@ -65,6 +84,17 @@ export function TransactionsCreateModal({
       ),
     [assets, form.assetType],
   );
+
+  useEffect(() => {
+    if (!defaultAccount) {
+      return;
+    }
+    setCreateMode(defaultCreateMode);
+    setForm((current) => ({
+      ...current,
+      accountId: defaultAccount.id,
+    }));
+  }, [defaultAccount, defaultCreateMode]);
 
   useEffect(() => {
     const defaultCreateAccountId = createAccounts[0]?.id ?? '';
@@ -224,9 +254,16 @@ export function TransactionsCreateModal({
             onChange={(event) =>
               setCreateMode(event.target.value as TransactionCreateMode)
             }
+            disabled={lockAccountId && Boolean(defaultAccount)}
           >
-            <option value="asset_transaction">Asset Transaction</option>
-            <option value="deposit">Savings Deposit</option>
+            {defaultAccount?.accountType === 'savings' ? (
+              <option value="deposit">Savings Deposit</option>
+            ) : (
+              <option value="asset_transaction">Asset Transaction</option>
+            )}
+            {!lockAccountId || !defaultAccount ? (
+              <option value="deposit">Savings Deposit</option>
+            ) : null}
           </select>
         </div>
 
@@ -245,6 +282,7 @@ export function TransactionsCreateModal({
               }))
             }
             required
+            disabled={lockAccountId}
           >
             <option value="">
               {createMode === 'deposit'

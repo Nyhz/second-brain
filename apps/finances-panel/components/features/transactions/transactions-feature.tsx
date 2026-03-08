@@ -1,17 +1,10 @@
-import type {
-  Account,
-  AssetWithPosition,
-  UnifiedTransactionRow,
-} from '@second-brain/types';
+import type { UnifiedTransactionRow } from '@second-brain/types';
 import { formatMoney } from '../../../lib/format';
 import { KpiCard } from '../../ui/kpi-card';
-import { TransactionsHeaderActions } from './transactions-header-actions';
 import { type TimelineFilterOption } from './transactions-shared';
 import { TransactionsTimeline } from './transactions-timeline';
 
 type TransactionsFeatureProps = {
-  accounts: Account[];
-  assets: AssetWithPosition[];
   assetNameById: Record<string, string>;
   assetTypeFilter: string;
   assetTypeFilterOptions: TimelineFilterOption[];
@@ -30,8 +23,6 @@ type TransactionsFeatureProps = {
 };
 
 export function TransactionsFeature({
-  accounts,
-  assets,
   assetNameById,
   assetTypeFilter,
   assetTypeFilterOptions,
@@ -56,10 +47,9 @@ export function TransactionsFeature({
             Transactions
           </h1>
           <p className="text-sm text-muted-foreground">
-            Register operations and import DEGIRO, Binance, or COBAS CSV files.
+            Review transaction history across all accounts.
           </p>
         </div>
-        <TransactionsHeaderActions accounts={accounts} assets={assets} />
       </div>
 
       <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
