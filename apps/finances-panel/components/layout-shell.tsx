@@ -9,7 +9,7 @@ import {
   type PlatformNavGroup,
   type PlatformNavItem,
 } from '@second-brain/ui';
-import { usePathname } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { buildAccountSlugMaps } from '../lib/account-slugs';
 import { LayoutControls } from './layout-controls';
@@ -61,6 +61,7 @@ export function LayoutShell({
   initialSensitiveHidden,
   initialTheme,
 }: LayoutShellProps) {
+  const router = useRouter();
   const pathname = usePathname() || '/';
   const appPathname = stripBasePath(
     pathname,
@@ -115,6 +116,8 @@ export function LayoutShell({
       sidebarGroups={navGroups}
       pathname={pathname}
       appPathname={appPathname}
+      appBasePath={process.env.NEXT_PUBLIC_BASE_PATH ?? ''}
+      onAppNavigate={(href) => router.push(href)}
       sidebarFooter={
         <PlatformSidebarNote
           eyebrow="Accounts"

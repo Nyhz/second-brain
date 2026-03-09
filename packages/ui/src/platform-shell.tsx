@@ -40,10 +40,34 @@ type PlatformShellProps = {
   children: ReactNode;
   pathname: string;
   appPathname?: string;
+  appBasePath?: string;
+  onAppNavigate?: (href: string) => void;
   className?: string;
 };
 
 const resolveMatchMode = (item: PlatformNavItem) => item.match ?? 'prefix';
+
+const normalizeBasePath = (basePath?: string) => {
+  if (!basePath || basePath === '/') {
+    return '';
+  }
+  const withLeadingSlash = basePath.startsWith('/') ? basePath : `/${basePath}`;
+  return withLeadingSlash.endsWith('/')
+    ? withLeadingSlash.slice(0, -1)
+    : withLeadingSlash;
+};
+
+const resolveItemHref = (item: PlatformNavItem, appBasePath?: string) => {
+  if (item.kind === 'platform') {
+    return item.href;
+  }
+
+  const normalizedBasePath = normalizeBasePath(appBasePath);
+  if (!normalizedBasePath || item.href === '/') {
+    return normalizedBasePath || '/';
+  }
+  return `${normalizedBasePath}${item.href}`;
+};
 
 const matchesPath = (path: string, item: PlatformNavItem) => {
   if (resolveMatchMode(item) === 'exact') {
@@ -81,10 +105,14 @@ const defaultPlatformLinks: PlatformNavItem[] = [
 function NavigationItem({
   item,
   active,
+  appBasePath,
+  onAppNavigate,
   compact = false,
 }: {
   item: PlatformNavItem;
   active: boolean;
+  appBasePath?: string;
+  onAppNavigate?: (href: string) => void;
   compact?: boolean;
 }) {
   if (item.disabled) {
@@ -129,8 +157,30 @@ function NavigationItem({
     );
   }
 
+  const href = resolveItemHref(item, appBasePath);
+  const appHref = item.href;
+
   return (
-    <a href={item.href} className={sharedClassName}>
+    <a
+      href={href}
+      onClick={(event) => {
+        if (
+          !onAppNavigate ||
+          event.defaultPrevented ||
+          event.button !== 0 ||
+          event.metaKey ||
+          event.ctrlKey ||
+          event.shiftKey ||
+          event.altKey
+        ) {
+          return;
+        }
+
+        event.preventDefault();
+        onAppNavigate(appHref);
+      }}
+      className={sharedClassName}
+    >
       {content}
     </a>
   );
@@ -143,6 +193,8 @@ function SidebarNavigation({
   pathname,
   appPathname,
   footer,
+  appBasePath,
+  onAppNavigate,
 }: {
   appName: string;
   appSubtitle: string | undefined;
@@ -150,6 +202,8 @@ function SidebarNavigation({
   pathname: string;
   appPathname: string;
   footer: ReactNode | undefined;
+  appBasePath?: string;
+  onAppNavigate?: (href: string) => void;
 }) {
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
   const groupedItems: { label: string; items: ResolvedNavItem[] }[] = useMemo(
@@ -214,14 +268,27 @@ function SidebarNavigation({
                 const isExpanded = expanded[item.href] ?? false;
 
                 if (!hasChildren) {
-                  return <NavigationItem key={item.href} item={item} active={item.active} />;
+                  return (
+                    <NavigationItem
+                      key={item.href}
+                      item={item}
+                      active={item.active}
+                      {...(appBasePath ? { appBasePath } : {})}
+                      {...(onAppNavigate ? { onAppNavigate } : {})}
+                    />
+                  );
                 }
 
                 return (
                   <div key={item.href} className="space-y-1">
                     <div className="flex items-center gap-1">
                       <div className="min-w-0 flex-1">
-                        <NavigationItem item={item} active={item.active} />
+                        <NavigationItem
+                          item={item}
+                          active={item.active}
+                          {...(appBasePath ? { appBasePath } : {})}
+                          {...(onAppNavigate ? { onAppNavigate } : {})}
+                        />
                       </div>
                       <button
                         type="button"
@@ -247,6 +314,8 @@ function SidebarNavigation({
                               item={child}
                               active={child.active}
                               compact
+                              {...(appBasePath ? { appBasePath } : {})}
+                              {...(onAppNavigate ? { onAppNavigate } : {})}
                             />
                           ))}
                         </div>
@@ -430,6 +499,8 @@ export function PlatformShell({
   children,
   pathname,
   appPathname,
+  appBasePath,
+  onAppNavigate,
   className,
 }: PlatformShellProps) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -459,6 +530,8 @@ export function PlatformShell({
       pathname={pathname}
       appPathname={resolvedAppPathname}
       footer={sidebarFooter}
+      {...(appBasePath ? { appBasePath } : {})}
+      {...(onAppNavigate ? { onAppNavigate } : {})}
     />
   );
 
