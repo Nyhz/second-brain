@@ -11,7 +11,7 @@ import { formatDateTime, formatMoney } from '../../../lib/format';
 import { cn } from '../../../lib/utils';
 import { AccountProfileExportModal } from './account-profile-export-modal';
 import { TransactionsHeaderActions } from '../transactions/transactions-header-actions';
-import { Button } from '../../ui/button';
+import { Button } from '@second-brain/ui';
 import { Card } from '../../ui/card';
 import { CollapsibleCard } from '../../ui/collapsible-card';
 import { KpiCard } from '../../ui/kpi-card';

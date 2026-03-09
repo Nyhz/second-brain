@@ -11,6 +11,7 @@
     "test": "bun test"
   },
   "dependencies": {
+    "@second-brain/ui": "workspace:*",
     "@second-brain/types": "workspace:*",
     "@radix-ui/react-dialog": "^1.1.15",
     "class-variance-authority": "^0.7.1",

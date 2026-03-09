@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 const baseSchema = z.object({
   DATABASE_URL: z.string().min(1),
+  PLATFORM_TIMEZONE: z.string().min(1).default('Europe/Madrid'),
 });
 
 const apiSchema = baseSchema.extend({
@@ -17,7 +18,9 @@ const apiSchema = baseSchema.extend({
 
 const workerSchema = baseSchema.extend({
   WORKER_PORT: z.coerce.number().int().positive().default(3002),
-  BALANCE_JOB_INTERVAL_SECONDS: z.coerce.number().int().positive().default(120),
+  BALANCE_TICK_SECONDS: z.coerce.number().int().positive().default(900),
+  BALANCE_TARGET_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(0),
+  BALANCE_TARGET_MINUTE_UTC: z.coerce.number().int().min(0).max(59).default(5),
   ASSET_SNAPSHOT_INTERVAL_SECONDS: z.coerce
     .number()
     .int()
@@ -78,7 +81,9 @@ const appSchema = z.object({
   INTERNAL_API_URL: z.string().url().default('http://localhost:3001'),
   NEXT_PUBLIC_BASE_PATH: z.string().default(''),
   FINANCES_PANEL_PORT: z.coerce.number().int().positive().default(3000),
+  CALENDAR_PORT: z.coerce.number().int().positive().default(3006),
   PORTAL_PORT: z.coerce.number().int().positive().default(3005),
+  PLATFORM_TIMEZONE: z.string().min(1).default('Europe/Madrid'),
 });
 
 export type ApiEnv = z.infer<typeof apiSchema>;

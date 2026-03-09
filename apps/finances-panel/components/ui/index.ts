@@ -1,5 +1,4 @@
 export * from './app-shell';
-export * from './button';
 export * from './card';
 export * from './confirm-modal';
 export * from './data-table';
@@ -8,5 +7,4 @@ export * from './modal';
 export * from './sensitive-toggle';
 export * from './side-nav';
 export * from './states';
-export * from './theme-selector';
 export * from './top-nav';

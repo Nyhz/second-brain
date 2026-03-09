@@ -1,7 +1,17 @@
+'use client';
+
 import type { ReactNode } from 'react';
-import { PortalNavbar } from './portal-navbar';
+import {
+  PlatformActionBar,
+  PlatformBackButton,
+  PlatformPageHeader,
+  PlatformSidebarNote,
+  PlatformShell as SharedPlatformShell,
+  type PlatformNavGroup,
+} from '@second-brain/ui';
+import { usePathname } from 'next/navigation';
+import { appModules, portalRoutes } from '../lib/portal-modules';
 import { ThemeSwitcher } from './theme-switcher';
-import { PortalTopbar } from './portal-topbar';
 
 type ThemeMode = 'dark' | 'light';
 
@@ -14,6 +24,29 @@ type PortalShellProps = {
   showHero?: boolean;
 };
 
+const portalSidebarGroups: PlatformNavGroup[] = [
+  {
+    label: 'Portal',
+    items: portalRoutes.map((route) => ({
+      href: route.href,
+      label: route.label,
+      kind: 'app' as const,
+      match: route.href === '/' ? 'exact' : 'prefix',
+    })),
+  },
+  {
+    label: 'Modules',
+    items: appModules.map((module) => ({
+      href: module.href,
+      label: module.name,
+      kind: module.status === 'live' ? ('platform' as const) : ('app' as const),
+      disabled: module.status !== 'live',
+      match: 'prefix' as const,
+      ...(module.status === 'live' ? {} : { meta: 'Soon' }),
+    })),
+  },
+];
+
 export function PortalShell({
   initialTheme,
   eyebrow,
@@ -22,32 +55,43 @@ export function PortalShell({
   children,
   showHero = true,
 }: PortalShellProps) {
+  const pathname = usePathname() || '/';
+  const isPortalHome = pathname === '/';
+
   return (
-    <div className="portal-app-shell">
-      <div className="portal-main-wrap">
-        <header className="portal-header">
-          <div className="surface portal-frame reveal">
-            <div className="portal-frame-topline">
-              <div className="portal-brand">
-                <p>Second Brain</p>
-                <span>Platform portal</span>
-              </div>
-              <ThemeSwitcher initialMode={initialTheme} />
-            </div>
-            <PortalNavbar />
-          </div>
-        </header>
-        {showHero ? (
-          <section className="portal-hero-frame surface reveal">
-            <PortalTopbar
-              eyebrow={eyebrow}
-              title={title}
-              description={description}
-            />
-          </section>
-        ) : null}
-        <main className="portal-page">{children}</main>
-      </div>
-    </div>
+    <SharedPlatformShell
+      appName="Second Brain"
+      appSubtitle="Platform portal"
+      topbarEyebrow="Portal"
+      topbarTitle={title}
+      topbarRight={<ThemeSwitcher initialMode={initialTheme} />}
+      sidebarGroups={portalSidebarGroups}
+      pathname={pathname}
+      contentTop={
+        !isPortalHome ? (
+          <PlatformActionBar
+            left={<PlatformBackButton />}
+          />
+        ) : undefined
+      }
+      pageHeader={
+        showHero ? (
+          <PlatformPageHeader
+            eyebrow={eyebrow}
+            title={title}
+            description={description}
+          />
+        ) : undefined
+      }
+      sidebarFooter={
+        <PlatformSidebarNote
+          eyebrow="Local-first"
+          title="Portal control surface"
+          description="Shared shell for runtime status, app switching, and local operations."
+        />
+      }
+    >
+      <div className="portal-page">{children}</div>
+    </SharedPlatformShell>
   );
 }

@@ -1,0 +1,26 @@
+{
+  "name": "@second-brain/calendar",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -p ${CALENDAR_PORT:-3006}",
+    "build": "next build",
+    "start": "next start -p ${CALENDAR_PORT:-3006}",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@second-brain/types": "workspace:*",
+    "@second-brain/ui": "workspace:*",
+    "lucide-react": "^0.544.0",
+    "next": "^15.2.2",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.9",
+    "@types/react": "^19.0.12",
+    "@types/react-dom": "^19.0.4"
+  }
+}

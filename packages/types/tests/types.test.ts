@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  createCalendarEventInputSchema,
   createAccountInputSchema,
   createAssetInputSchema,
 } from '../src/index';
@@ -42,5 +43,30 @@ describe('types schemas', () => {
 
     expect(retirementResult.success).toBe(true);
     expect(stockResult.success).toBe(false);
+  });
+
+  test('validates calendar event payloads with recurrence and reminders', () => {
+    const valid = createCalendarEventInputSchema.safeParse({
+      title: 'Dentist',
+      startAt: '2026-03-09T16:00:00.000Z',
+      endAt: '2026-03-09T17:00:00.000Z',
+      timezone: 'Europe/Madrid',
+      source: 'ai',
+      reminders: [{ minutesBeforeStart: 30 }],
+      recurrence: {
+        rrule: 'FREQ=WEEKLY;INTERVAL=1',
+        seriesStartsAt: '2026-03-09T16:00:00.000Z',
+      },
+    });
+    const invalid = createCalendarEventInputSchema.safeParse({
+      title: 'Broken event',
+      startAt: '2026-03-09T17:00:00.000Z',
+      endAt: '2026-03-09T16:00:00.000Z',
+      timezone: 'Europe/Madrid',
+      reminders: [],
+    });
+
+    expect(valid.success).toBe(true);
+    expect(invalid.success).toBe(false);
   });
 });

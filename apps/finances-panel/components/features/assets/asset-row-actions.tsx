@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic';
 import { useState } from 'react';
 import { apiRequest } from '../../../lib/api';
 import { useRefreshMutation } from '../../../lib/use-refresh-mutation';
-import { Button } from '../../ui/button';
+import { Button } from '@second-brain/ui';
 import { ConfirmModal } from '../../ui/confirm-modal';
 
 const AssetsMetadataModal = dynamic(

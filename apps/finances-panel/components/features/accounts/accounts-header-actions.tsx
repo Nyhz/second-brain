@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic';
 import { useState } from 'react';
 import { useRefreshMutation } from '../../../lib/use-refresh-mutation';
-import { Button } from '../../ui/button';
+import { Button } from '@second-brain/ui';
 
 const AccountsCreateModal = dynamic(
   () =>

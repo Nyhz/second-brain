@@ -6,7 +6,7 @@ import { useMemo, useState } from 'react';
 import { apiRequest } from '../../../lib/api';
 import { formatDateTime } from '../../../lib/format';
 import { useRefreshMutation } from '../../../lib/use-refresh-mutation';
-import { Button } from '../../ui/button';
+import { Button } from '@second-brain/ui';
 import { Card } from '../../ui/card';
 import { ConfirmModal } from '../../ui/confirm-modal';
 import { EmptyState, ErrorState } from '../../ui/states';

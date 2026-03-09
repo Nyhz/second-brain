@@ -1,19 +1,52 @@
+'use client';
+
 import type { Account } from '@second-brain/types';
+import {
+  PlatformActionBar,
+  PlatformBackButton,
+  PlatformShell,
+  PlatformSidebarNote,
+  type PlatformNavGroup,
+  type PlatformNavItem,
+} from '@second-brain/ui';
+import { usePathname } from 'next/navigation';
 import type { ReactNode } from 'react';
 import { buildAccountSlugMaps } from '../lib/account-slugs';
 import { LayoutControls } from './layout-controls';
-import { AppShell } from './ui/app-shell';
-import { type NavGroup, type NavItem, SideNav } from './ui/side-nav';
-import { TopNav } from './ui/top-nav';
+import { SensitiveControls } from './sensitive-controls';
 
-const navItems: NavItem[] = [
-  { href: '/', label: 'Overview' },
-  { href: '/assets', label: 'Assets' },
-  { href: '/accounts', label: 'Accounts' },
-  { href: '/transactions', label: 'Transactions' },
-  { href: '/taxes', label: 'Taxes' },
-  { href: '/audit', label: 'Audit' },
+const navItems: PlatformNavItem[] = [
+  { href: '/', label: 'Overview', kind: 'app', match: 'exact' },
+  { href: '/assets', label: 'Assets', kind: 'app' },
+  { href: '/accounts', label: 'Accounts', kind: 'app' },
+  { href: '/transactions', label: 'Transactions', kind: 'app' },
+  { href: '/taxes', label: 'Taxes', kind: 'app' },
+  { href: '/audit', label: 'Audit', kind: 'app' },
 ];
+
+const normalizeBasePath = (basePath?: string) => {
+  if (!basePath || basePath === '/') {
+    return '';
+  }
+  const withLeadingSlash = basePath.startsWith('/') ? basePath : `/${basePath}`;
+  return withLeadingSlash.endsWith('/')
+    ? withLeadingSlash.slice(0, -1)
+    : withLeadingSlash;
+};
+
+const stripBasePath = (path: string, basePath?: string) => {
+  const normalizedBasePath = normalizeBasePath(basePath);
+  if (!normalizedBasePath) {
+    return path || '/';
+  }
+  if (path === normalizedBasePath) {
+    return '/';
+  }
+  if (path.startsWith(`${normalizedBasePath}/`)) {
+    return path.slice(normalizedBasePath.length);
+  }
+  return path || '/';
+};
 
 type LayoutShellProps = {
   children: ReactNode;
@@ -28,12 +61,18 @@ export function LayoutShell({
   initialSensitiveHidden,
   initialTheme,
 }: LayoutShellProps) {
+  const pathname = usePathname() || '/';
+  const appPathname = stripBasePath(
+    pathname,
+    process.env.NEXT_PUBLIC_BASE_PATH ?? '',
+  );
   const accountSlugMaps = buildAccountSlugMaps(initialAccounts);
-  const accountChildItems: NavItem[] = initialAccounts.map((account) => {
+  const accountChildItems: PlatformNavItem[] = initialAccounts.map((account) => {
     const slug = accountSlugMaps.slugsById.get(account.id) ?? account.id;
     return {
       href: `/accounts/${encodeURIComponent(slug)}`,
       label: account.name,
+      kind: 'app',
     };
   });
   const shellItems = navItems.map((item) =>
@@ -41,7 +80,7 @@ export function LayoutShell({
       ? { ...item, children: accountChildItems }
       : item,
   );
-  const navGroups: NavGroup[] = [
+  const navGroups: PlatformNavGroup[] = [
     {
       label: 'Overview',
       items: shellItems.slice(0, 1),
@@ -51,33 +90,40 @@ export function LayoutShell({
       items: shellItems.slice(1),
     },
   ];
-  const portalHref = process.env.NEXT_PUBLIC_PORTAL_URL ?? '/';
 
   return (
-    <AppShell
-      topNav={
-        <TopNav
-          title="Portfolio Operations"
-          eyebrow="Second Brain Finances"
-          left={
-            <a
-              href={portalHref}
-              className="inline-flex h-8 items-center rounded-md border border-border bg-secondary px-3 text-xs font-medium text-secondary-foreground transition-colors hover:bg-secondary/85"
-            >
-              Go Back
-            </a>
-          }
+    <PlatformShell
+      appName="Second Brain"
+      appSubtitle="Finances workspace"
+      topbarEyebrow="Second Brain Finances"
+      topbarTitle="Portfolio Operations"
+      topbarRight={
+        <LayoutControls
+          initialTheme={initialTheme}
+        />
+      }
+      contentTop={
+        <PlatformActionBar
+          left={<PlatformBackButton />}
           right={
-            <LayoutControls
+            <SensitiveControls
               initialSensitiveHidden={initialSensitiveHidden}
-              initialTheme={initialTheme}
             />
           }
         />
       }
-      sideNav={<SideNav groups={navGroups} items={shellItems} />}
+      sidebarGroups={navGroups}
+      pathname={pathname}
+      appPathname={appPathname}
+      sidebarFooter={
+        <PlatformSidebarNote
+          eyebrow="Accounts"
+          title={`${initialAccounts.length} tracked account${initialAccounts.length === 1 ? '' : 's'}`}
+          description="Sidebar keeps portfolio sections stable while the app-specific account tree stays local."
+        />
+      }
     >
       {children}
-    </AppShell>
+    </PlatformShell>
   );
 }

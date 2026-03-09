@@ -12,6 +12,22 @@
         "typescript": "^5.8.2",
       },
     },
+    "apps/calendar": {
+      "name": "@second-brain/calendar",
+      "version": "0.1.0",
+      "dependencies": {
+        "@second-brain/types": "workspace:*",
+        "lucide-react": "^0.544.0",
+        "next": "^15.2.2",
+        "react": "^19.0.0",
+        "react-dom": "^19.0.0",
+      },
+      "devDependencies": {
+        "@types/node": "^22.13.9",
+        "@types/react": "^19.0.12",
+        "@types/react-dom": "^19.0.4",
+      },
+    },
     "apps/finances-panel": {
       "name": "@second-brain/finances-panel",
       "version": "0.1.0",
@@ -310,6 +326,8 @@
     "@radix-ui/react-use-layout-effect": ["@radix-ui/react-use-layout-effect@1.1.1", "", { "peerDependencies": { "@types/react": "*", "react": "^16.8 || ^17.0 || ^18.0 || ^19.0 || ^19.0.0-rc" }, "optionalPeers": ["@types/react"] }, "sha512-RbJRS4UWQFkzHTTwVymMTUv8EqYhOp8dOOviLj2ugtTiXRaRQS7GLGxZTLL1jWhMeoSCf5zmcZkqTl9IiYfXcQ=="],
 
     "@second-brain/api": ["@second-brain/api@workspace:services/api"],
+
+    "@second-brain/calendar": ["@second-brain/calendar@workspace:apps/calendar"],
 
     "@second-brain/config": ["@second-brain/config@workspace:packages/config"],
 

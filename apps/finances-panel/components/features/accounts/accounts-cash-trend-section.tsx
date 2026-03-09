@@ -2,7 +2,7 @@
 
 import dynamic from 'next/dynamic';
 import { useState } from 'react';
-import { Button } from '../../ui/button';
+import { Button } from '@second-brain/ui';
 import { EmptyState, LoadingSkeleton } from '../../ui/states';
 
 const AccountsCashTrendChart = dynamic(

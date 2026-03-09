@@ -14,6 +14,7 @@ COPY package.json bunfig.toml tsconfig.base.json ./
 COPY packages ./packages
 COPY services/worker ./services/worker
 
+RUN rm -rf /app/packages/ui
 RUN bun install
 RUN for d in /app/packages/* /app/services/worker; do rm -rf "$d/node_modules"; ln -s /app/node_modules "$d/node_modules"; done
 

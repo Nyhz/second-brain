@@ -30,9 +30,9 @@ export const appModules: PortalModule[] = [
     name: 'Calendar',
     href: '/calendar',
     description: 'Scheduling workspace and timeline orchestration.',
-    detail: 'Reserved domain for planning workflows, routines, and date-driven automations.',
-    status: 'planned',
-    cta: 'Coming soon',
+    detail: 'Live month grid, agenda, recurring events, and structured AI event intake.',
+    status: 'live',
+    cta: 'Open module',
     icon: CalendarDays,
   },
   {

@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { apiRequest } from '../../../lib/api';
 import { getApiErrorMessage } from '../../../lib/errors';
-import { Button } from '../../ui/button';
+import { Button } from '@second-brain/ui';
 import { Modal } from '../../ui/modal';
 import {
   deriveTicker,

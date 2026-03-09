@@ -4,7 +4,7 @@ import type { OverviewRange, OverviewState } from '../dashboard-types';
 import { loadAccountsData } from './accounts-data';
 import { loadAuditData } from './audit-data';
 import { loadAssetsData } from './assets-data';
-import { loadOverview } from './overview-data';
+import { loadOverviewWithRevalidate } from './overview-data';
 import { loadTransactionsData } from './transactions-data';
 
 type TaxSummary = {
@@ -29,7 +29,7 @@ export const loadServerOverview = cache(
   async (
     range: OverviewRange = '1M',
     accountId = 'all',
-  ): Promise<OverviewState> => loadOverview(range, accountId),
+  ): Promise<OverviewState> => loadOverviewWithRevalidate(range, accountId, 60),
 );
 
 export const loadServerTransactionsData = cache(

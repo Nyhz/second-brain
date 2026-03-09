@@ -2,7 +2,7 @@
 
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useState, useTransition } from 'react';
-import { Button } from '../../ui/button';
+import { Button } from '@second-brain/ui';
 
 export function TaxYearControls({ initialYear }: { initialYear: number }) {
   const router = useRouter();

@@ -1,7 +1,7 @@
 'use client';
 
+import { Button } from '@second-brain/ui';
 import { cn } from '../../lib/utils';
-import { Button } from './button';
 
 type SensitiveToggleProps = {
   value: boolean;

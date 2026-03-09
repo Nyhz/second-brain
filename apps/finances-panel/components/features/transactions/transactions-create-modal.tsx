@@ -15,7 +15,7 @@ import {
   type TransactionFormInput,
   validateTransactionForm,
 } from '../../../lib/transactions';
-import { Button } from '../../ui/button';
+import { Button } from '@second-brain/ui';
 import { Modal } from '../../ui/modal';
 import {
   initialForm,

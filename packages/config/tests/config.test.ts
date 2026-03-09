@@ -17,11 +17,13 @@ describe('config', () => {
       INTERNAL_API_URL: 'http://api:3001',
       NEXT_PUBLIC_BASE_PATH: '/finances',
       FINANCES_PANEL_PORT: '3000',
+      CALENDAR_PORT: '3006',
       PORTAL_PORT: '3005',
     });
 
     expect(parsed.NEXT_PUBLIC_API_URL).toBe('/api');
     expect(parsed.NEXT_PUBLIC_BASE_PATH).toBe('/finances');
+    expect(parsed.CALENDAR_PORT).toBe(3006);
     expect(parsed.PORTAL_PORT).toBe(3005);
   });
 
@@ -31,6 +33,9 @@ describe('config', () => {
       WORKER_PORT: '3002',
     });
 
+    expect(parsed.BALANCE_TICK_SECONDS).toBe(900);
+    expect(parsed.BALANCE_TARGET_HOUR_UTC).toBe(0);
+    expect(parsed.BALANCE_TARGET_MINUTE_UTC).toBe(5);
     expect(parsed.SERVICE_HEALTH_INTERVAL_SECONDS).toBe(3600);
     expect(parsed.API_HEALTH_URL).toBe('http://api:3001/health');
     expect(parsed.CADDY_HEALTH_URL).toBe('http://caddy:8080/__caddy/healthz');

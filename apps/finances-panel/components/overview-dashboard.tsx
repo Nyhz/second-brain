@@ -6,7 +6,9 @@ import type {
 } from '../lib/dashboard-types';
 import { formatDateTime, formatMoney } from '../lib/format';
 import { cn } from '../lib/utils';
+import { OverviewChartPreloader } from './overview-chart-preloader';
 import { Card } from './ui/card';
+import { loadAreaPerformanceChart } from './ui/charts/area-performance-chart-loader';
 import { KpiCard } from './ui/kpi-card';
 import { OverviewPositionsTable } from './overview-positions-table';
 import { EmptyState } from './ui/states';
@@ -15,15 +17,9 @@ const RANGES: OverviewRange[] = ['1W', '1M', 'YTD', '1Y', 'MAX'];
 const filterButtonBase =
   'inline-flex h-8 items-center rounded-md border border-border/70 bg-card/70 px-3 text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground';
 
-const AreaPerformanceChart = dynamic(
-  () =>
-    import('./ui/charts/area-performance-chart').then((module) => ({
-      default: module.AreaPerformanceChart,
-    })),
-  {
-    loading: () => <ChartSkeleton height={280} />,
-  },
-);
+const AreaPerformanceChart = dynamic(loadAreaPerformanceChart, {
+  loading: () => <ChartSkeleton height={280} />,
+});
 
 const Sparkline = dynamic(
   () =>
@@ -78,6 +74,8 @@ export function OverviewDashboard({ initialData }: OverviewDashboardProps) {
 
   return (
     <div className="space-y-6">
+      <OverviewChartPreloader />
+
       <header className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
         <div className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight">Overview</h1>

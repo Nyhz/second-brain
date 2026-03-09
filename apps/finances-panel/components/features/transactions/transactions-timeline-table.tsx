@@ -3,7 +3,7 @@
 import type { UnifiedTransactionRow } from '@second-brain/types';
 import { prettyAssetType } from '../../../lib/display';
 import { formatDateTime, formatMoney, formatMoneyByCurrency } from '../../../lib/format';
-import { Button } from '../../ui/button';
+import { Button } from '@second-brain/ui';
 import { DataTable } from '../../ui/data-table';
 import { getTransactionFeeLabel, prettyTxType } from './transactions-shared';
 

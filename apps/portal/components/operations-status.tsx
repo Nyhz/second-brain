@@ -4,6 +4,7 @@ import type {
   ServiceCheckNowResponse,
   ServiceStatusHistoryResponse,
 } from '@second-brain/types';
+import { Button } from '@second-brain/ui';
 import { useMemo, useState } from 'react';
 import {
   defaultProbeTargets,
@@ -14,7 +15,6 @@ import {
   summarizeCheckNowResults,
   summarizeOperationsHistory,
 } from '../lib/operations-data';
-import { Button } from './ui/button';
 import { Modal } from './ui/modal';
 
 type OperationsStatusProps = {

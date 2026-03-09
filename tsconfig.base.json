@@ -16,7 +16,8 @@
     "paths": {
       "@second-brain/types": ["packages/types/src/index.ts"],
       "@second-brain/config": ["packages/config/src/index.ts"],
-      "@second-brain/db": ["packages/db/src/index.ts"]
+      "@second-brain/db": ["packages/db/src/index.ts"],
+      "@second-brain/ui": ["packages/ui/src/index.ts"]
     }
   }
 }

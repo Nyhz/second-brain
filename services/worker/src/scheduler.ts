@@ -59,11 +59,33 @@ export const startScheduler = () => {
   const env = loadWorkerEnv();
 
   const runBalanceJob = async () => {
+    const now = new Date();
+    if (
+      !shouldRunToday(
+        now,
+        env.BALANCE_TARGET_HOUR_UTC,
+        env.BALANCE_TARGET_MINUTE_UTC,
+      )
+    ) {
+      return;
+    }
+
+    const jobName = 'finances_compute_daily_balances';
+
     try {
+      const alreadyRun = await hasSuccessfulRunInUtcDay(
+        env.DATABASE_URL,
+        jobName,
+        now,
+      );
+      if (alreadyRun) {
+        return;
+      }
+
       await runWithAdvisoryLock(
         env.DATABASE_URL,
-        'finances_compute_daily_balances',
-        new Date(),
+        jobName,
+        now,
         () => computeDailyBalances(env.DATABASE_URL),
       );
     } catch (error) {
@@ -192,7 +214,7 @@ export const startScheduler = () => {
 
   const balanceTimer = setInterval(() => {
     void runBalanceJob();
-  }, env.BALANCE_JOB_INTERVAL_SECONDS * 1000);
+  }, env.BALANCE_TICK_SECONDS * 1000);
 
   const assetSnapshotTimer = setInterval(() => {
     void runAssetSnapshotJob();

@@ -1,21 +1,21 @@
 'use client';
 
 import { Moon, Sun } from 'lucide-react';
-import { cn } from '../../lib/utils';
+import { cn } from './utils';
 
 type ThemeMode = 'dark' | 'light';
 
-type ThemeSelectorProps = {
+type ThemeToggleProps = {
   value: ThemeMode;
   onChange: (mode: ThemeMode) => void;
   compact?: boolean;
 };
 
-export function ThemeSelector({
+export function ThemeToggle({
   value,
   onChange,
   compact = false,
-}: ThemeSelectorProps) {
+}: ThemeToggleProps) {
   const isLight = value === 'light';
 
   return (
@@ -35,10 +35,7 @@ export function ThemeSelector({
         Theme mode is {value}. Activate to switch to {isLight ? 'dark' : 'light'}
         .
       </span>
-      <span
-        aria-hidden="true"
-        className="relative h-4 w-4"
-      >
+      <span aria-hidden="true" className="relative h-4 w-4">
         <Sun
           className={cn(
             'absolute inset-0 h-4 w-4 transition-all duration-300 ease-out',

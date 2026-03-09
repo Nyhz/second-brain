@@ -7,7 +7,7 @@ import {
   type AccountPdfPeriodMode,
   buildAccountPdfUrl,
 } from '../../../lib/account-pdf';
-import { Button } from '../../ui/button';
+import { Button } from '@second-brain/ui';
 import { Modal } from '../../ui/modal';
 
 const DOCUMENT_OPTIONS: Array<{

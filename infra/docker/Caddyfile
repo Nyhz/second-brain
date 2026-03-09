@@ -13,6 +13,10 @@ secondbrain.lan {
     reverse_proxy finances-panel:3000
   }
 
+  handle /calendar* {
+    reverse_proxy calendar:3006
+  }
+
   handle {
     reverse_proxy portal:3005
   }

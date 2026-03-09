@@ -1,6 +1,6 @@
 'use client';
 
-import { Button } from './button';
+import { Button } from '@second-brain/ui';
 import { Modal } from './modal';
 
 type ConfirmModalProps = {

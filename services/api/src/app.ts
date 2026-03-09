@@ -8,6 +8,7 @@ import {
   httpRequestsTotal,
   registry,
 } from './metrics';
+import { registerCalendarRoutes } from './modules/calendar/routes';
 import { registerFinancesRoutes } from './modules/finances/routes';
 import { registerOpsRoutes } from './modules/ops/routes';
 
@@ -91,6 +92,9 @@ export const createApiApp = () => {
   });
 
   registerFinancesRoutes(app, env.DATABASE_URL);
+  registerCalendarRoutes(app, env.DATABASE_URL, {
+    defaultTimezone: env.PLATFORM_TIMEZONE,
+  });
   registerOpsRoutes(app, env.DATABASE_URL, {
     timeoutMs: env.SERVICE_HEALTH_TIMEOUT_MS,
     targets: [
